@@ -1,0 +1,62 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+jarvis_memory.sqlite3
+*.log
+*.egg-info/
+.env
+.env.*
+.DS_Store
+.vscode/
+.idea/
+build/
+dist/
+*.pyc
+*.pkl
+*.pt
+*.onnx
+*.caffemodel
+/models/
+/models/*
+models/
+models/*
+assets/
+*.mp4
+*.mov
+*.avi
+*.wav
+*.mp3
+
+# Ignore Python virtual environments inside projects
+.env/
+
+# Ignore captured data directories
+data/captures/
+data/intruders/
+data/screenshots/
+
+# Node / other
+node_modules/
+
+# JetBrains
+.idea/
+
+# Mac
+*.DS_Store
+
+# Data runtime and test database files
+*.db
+jarvis_ai/data/
+**/data/captures/
+**/data/faces/
+**/data/intruders/
+**/data/screenshots/
+*.log.*
+
+# Scratch and planning files
+ddg.html
+commit_plan.md
