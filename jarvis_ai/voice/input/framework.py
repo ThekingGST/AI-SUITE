@@ -51,11 +51,11 @@ class AudioInputFramework:
             wakeword
         ]
         
-        if VOSK_AVAILABLE:
-            stt = VoskBackend(self.profile, sample_rate=CONFIG.voice.sample_rate)
-            processors.append(stt)
-        else:
-            LOGGER.warning("AudioInputFramework: Vosk is not available. STT disabled.")
+        from jarvis_ai.voice.input.stt.backend_router import STTBackendRouter
+        
+        # Integrate STT Backend Router
+        self.stt_router = STTBackendRouter(self.profile, sample_rate=CONFIG.voice.sample_rate, preferred_backend='auto')
+        processors.append(self.stt_router)
             
         self.pipeline.build_chain(*processors)
         

@@ -120,6 +120,8 @@ class AudioCaptureWorker:
             LOGGER.info(f"Stream opened on device {device_index}")
             self._event_bus.emit(AudioEvent.AUDIO_STARTED)
             
+            LOGGER.info("[AUDIO] microphone initialized")
+            
             import numpy as np
             while not self._stop_event.is_set():
                 try:
@@ -128,6 +130,14 @@ class AudioCaptureWorker:
                     
                     if self._paused.is_set():
                         continue
+                        
+                    # DIAGNOSTICS
+                    if len(data) > 0:
+                        audio_np = np.frombuffer(data, dtype=np.int16)
+                        rms = np.sqrt(np.mean(np.square(audio_np.astype(np.float32)))) if len(audio_np) > 0 else 0.0
+                        peak = np.max(np.abs(audio_np)) if len(audio_np) > 0 else 0
+                        if np.random.random() < 0.05: # Sample 5% of frames for logging
+                            LOGGER.info(f"[AUDIO] frame received: {len(audio_np)} samples | RMS: {rms:.4f} | peak: {peak}")
                         
                     frame = AudioFrame(
                         data=data,
