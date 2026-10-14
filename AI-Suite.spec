@@ -41,7 +41,12 @@ hiddenimports = [
     'cv2',                  # OpenCV (Computer Vision)
     'ai_suite.ui.boot.boot_controller', # Boot sequence dynamic loading
     'ai_suite.ui.onboarding_wizard',    # Explicit onboarding packaging
-    'shared.logger'         # Centralized logging
+    'shared.logger',         # Centralized logging
+    'fitz',                  # PyMuPDF for PDF parsing/generation
+    'docx',                  # python-docx for DOCX parsing/generation
+    'pptx',                  # python-pptx for PPTX parsing/generation
+    'openpyxl',              # openpyxl for XLSX reading
+    'reportlab',             # reportlab for PDF generation
 ]
 
 # =============================================================================

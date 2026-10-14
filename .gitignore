@@ -34,6 +34,7 @@ installers/*.exe
 installers/*.msi
 *.exe
 *.msi
+*.zip
 
 # Caches & Temporary Artifacts
 cache/
@@ -96,3 +97,17 @@ friday_ai/data/*
 
 # Node
 node_modules/
+
+# Heavy Neural Model Weights
+models/*.pt
+models/*.caffemodel
+models/*.onnx
+models/vosk-model/
+*.pt
+*.onnx
+*.caffemodel
+
+# Runtime logs, state and dumps
+*.log.*
+voice_mode.txt
+ddg.html

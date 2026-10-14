@@ -1,3 +1,10 @@
+"""Thread-safe singleton model cache for AI Suite V2.
+
+All expensive vision/AI models load only once and are shared
+across the application. Uses HardwareManager for device selection
+instead of inline CUDA detection.
+"""
+
 from __future__ import annotations
 
 import threading
@@ -26,9 +33,26 @@ class ModelManager:
         self._lock = threading.RLock()
         self._cache: dict[str, Any] = {}
 
+    def _get_hardware_manager(self):
+        """Lazy import to avoid circular dependency at module level."""
+        try:
+            from shared.hardware.manager import HardwareManager
+            return HardwareManager()
+        except Exception:
+            return None
+
     def release_all(self) -> None:
+        """Release all heavy AI models from memory, including GPU VRAM."""
         with self._lock:
             self._cache.clear()
+            # Free GPU memory if PyTorch CUDA was used
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    LOGGER.info("GPU VRAM cache cleared.")
+            except Exception:
+                pass
             LOGGER.info("All heavy AI models released from memory.")
 
     def get_face_detector(self) -> Any | None:
@@ -44,7 +68,7 @@ class ModelManager:
             try:
                 net = cv2.dnn.readNetFromCaffe(str(prototxt), str(caffemodel))
                 self._cache["face_detector"] = net
-                LOGGER.info("Face detector loaded.")
+                LOGGER.info("Face detector loaded (CPU — OpenCV DNN).")
                 return net
             except Exception as exc:
                 LOGGER.warning("Face detector load failed: %s", exc)
@@ -61,7 +85,6 @@ class ModelManager:
                 self._cache["yunet"] = None
                 return None
             try:
-                # Default input size (will be updated dynamically per frame if needed)
                 detector = cv2.FaceDetectorYN.create(
                     model=str(model),
                     config="",
@@ -71,7 +94,7 @@ class ModelManager:
                     top_k=5000,
                 )
                 self._cache["yunet"] = detector
-                LOGGER.info("YuNet Face detector loaded.")
+                LOGGER.info("YuNet Face detector loaded (CPU — OpenCV DNN).")
                 return detector
             except Exception as exc:
                 LOGGER.warning("YuNet load failed: %s", exc)
@@ -89,19 +112,25 @@ class ModelManager:
                 return self._cache["sface"]
             try:
                 import onnxruntime as ort
-                
-                available_providers = ort.get_available_providers()
-                providers = []
-                if "CUDAExecutionProvider" in available_providers:
-                    providers.append("CUDAExecutionProvider")
-                providers.append("CPUExecutionProvider")
-                
+
+                # Use HardwareManager for provider selection
+                hw = self._get_hardware_manager()
+                if hw is not None:
+                    providers = hw.get_onnx_providers()
+                else:
+                    # Fallback: inline detection (backward compatible)
+                    available = ort.get_available_providers()
+                    providers = []
+                    if "CUDAExecutionProvider" in available:
+                        providers.append("CUDAExecutionProvider")
+                    providers.append("CPUExecutionProvider")
+
                 session = ort.InferenceSession(str(model), providers=providers)
                 input_name = session.get_inputs()[0].name
                 self._cache["sface"] = (session, input_name)
-                
+
                 active_providers = session.get_providers()
-                LOGGER.info("SFace recognizer loaded. Providers: %s", active_providers)
+                LOGGER.info("SFace recognizer loaded. Active providers: %s", active_providers)
                 return self._cache["sface"]
             except Exception as exc:
                 LOGGER.warning("SFace model failed to load: %s", exc)
@@ -119,19 +148,30 @@ class ModelManager:
                 return None
             try:
                 from ultralytics import YOLO
-                import torch
 
-                cuda_avail = torch.cuda.is_available()
-                gpu_name = torch.cuda.get_device_name(0) if cuda_avail else "None"
-                cuda_version = torch.version.cuda if cuda_avail else "None"
-                
-                LOGGER.info("GPU Check -> CUDA Available: %s, GPU: %s, CUDA Version: %s", cuda_avail, gpu_name, cuda_version)
+                # Use HardwareManager for device selection
+                hw = self._get_hardware_manager()
+                if hw is not None:
+                    device = hw.get_torch_device()
+                    LOGGER.info(
+                        "GPU Check -> CUDA Available: %s, GPU: %s, CUDA Version: %s, Verified: %s",
+                        hw.cuda.pytorch_available,
+                        hw.cuda.device_name,
+                        hw.cuda.cuda_version,
+                        hw.gpu_verified,
+                    )
+                else:
+                    # Fallback: inline detection (backward compatible)
+                    import torch
+                    cuda_avail = torch.cuda.is_available()
+                    device = "cuda:0" if cuda_avail else "cpu"
+                    gpu_name = torch.cuda.get_device_name(0) if cuda_avail else "None"
+                    LOGGER.info("GPU Check (fallback) -> CUDA: %s, GPU: %s", cuda_avail, gpu_name)
 
                 model = YOLO(str(model_path))
-                device = "cuda:0" if cuda_avail else "cpu"
                 model.to(device)
                 self._cache["yolo"] = model
-                LOGGER.info("YOLOv8 object detector loaded. Exact YOLO device selected: %s", model.device)
+                LOGGER.info("YOLOv8 object detector loaded. Device: %s", model.device)
                 return model
             except Exception as exc:
                 LOGGER.error("YOLO load failed: %s", exc)

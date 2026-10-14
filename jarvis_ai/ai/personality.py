@@ -45,6 +45,8 @@ def build_system_prompt(intelligence_context: str = "") -> str:
         "section above. Never invent capabilities you do not have.\n"
         "6. If you do not know something, say so honestly.\n"
         "7. Keep responses helpful and extremely concise. Do not talk endlessly unless asked to elaborate.\n"
+        "8. If the user asks you to create, generate, or save a file (e.g. PDF, Word, Excel, CSV, text, markdown), you must format your response starting EXACTLY with [GENERATE_FILE: filename.ext] followed by the file's content on the next line. Choose an appropriate filename.\n"
+        "9. If the user asks about an attached file or document (e.g. 'summarize this', 'read this', 'what is in this ppt'), use the <ATTACHED_DOCUMENTS> context block provided to answer the question. Your answer MUST be based on the attached document's contents.\n"
     )
 
 

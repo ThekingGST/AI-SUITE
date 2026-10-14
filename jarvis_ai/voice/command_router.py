@@ -9,6 +9,7 @@ from jarvis_ai.ai.memory import MemoryStore
 from jarvis_ai.ai.ollama_brain import OllamaBrain
 from jarvis_ai.ai.openrouter_brain import OpenRouterBrain
 from jarvis_ai.automation.app_launcher import AppLauncher
+from shared.documents.generators import GeneratorManager
 from jarvis_ai.automation.brightness_controller import BrightnessController
 from jarvis_ai.automation.file_assistant import FileAssistant
 from jarvis_ai.automation.folder_launcher import FolderLauncher
@@ -66,6 +67,7 @@ class CommandRouter:
         self.launcher = AppLauncher()
         self.folders = FolderLauncher()
         self.files = FileAssistant()
+        self.generator_manager = GeneratorManager()
         self.utilities = Utilities()
         self.web_search = WebSearch()
         self.plugins = PluginRegistry()
@@ -122,7 +124,9 @@ class CommandRouter:
     def handle(self, raw_text: str, speak: bool = True) -> str:
         import time
         import threading
+        t_start = time.perf_counter()
         LOGGER.info("Routing command: '%s'", raw_text)
+        LOGGER.info("[DOC] query received")
         
         text = self._normalize_command(raw_text)
         
@@ -132,11 +136,14 @@ class CommandRouter:
                 speech_manager.interrupt()
             return ""
 
+        t0 = time.perf_counter()
         try:
             result = self._route(text)
         except Exception as exc:
             LOGGER.exception("Command failed")
             result = f"I encountered an error, but I recovered: {exc}"
+        t_route = (time.perf_counter() - t0) * 1000
+        LOGGER.info("[TIMING] Router intent/planning: %.2f ms", t_route)
 
         from typing import Iterator
         if isinstance(result, Iterator) or hasattr(result, "__iter__") and not isinstance(result, str):
@@ -144,14 +151,16 @@ class CommandRouter:
             from jarvis_ai.voice.v2.sentence_buffer import SentenceBuffer
             from jarvis_ai.voice.v2.types import SpeechPriority
 
-            # Create a buffer to feed sentences to the SpeechManager
             speech_manager = getattr(self.speaker, "manager", None)
             
-            if speech_manager and speak:
+            # Check if this might be a generation task based on user input
+            is_generation_task = re.search(r"\b(create|generate|save|export|make)\b.*\b(file|pdf|word|docx|excel|xlsx|csv|text|txt|markdown|md|json|powerpoint|pptx|presentation)\b", text.lower()) is not None
+            
+            if speech_manager and speak and not is_generation_task:
                 speech_manager.set_streaming_session(True)
             
             def enqueue_chunk(chunk: str) -> None:
-                if speech_manager and speak:
+                if speech_manager and speak and not is_generation_task:
                     speech_manager.enqueue(chunk, SpeechPriority.NORMAL)
 
             buffer = SentenceBuffer(on_sentence=enqueue_chunk)
@@ -162,15 +171,58 @@ class CommandRouter:
                     LOGGER.info("CommandRouter: LLM generation aborted.")
                     break
                 full_response_parts.append(token)
-                buffer.feed(token)
+                if not is_generation_task:
+                    buffer.feed(token)
                 
-            if not (speech_manager and speech_manager.is_aborted):
+            if not (speech_manager and speech_manager.is_aborted) and not is_generation_task:
                 buffer.flush()
             else:
                 buffer.clear()
+                
             full_response = "".join(full_response_parts)
             
-            if speech_manager and speak:
+            if full_response.strip() == "":
+                LOGGER.warning("[LLM] Empty response received. Applying safe fallback response.")
+                fallback = "Sorry, I wasn't able to generate a response this time. Please try again."
+                
+                # Check for failed documents if applicable
+                if hasattr(self, "brain") and hasattr(self.brain, "retriever") and self.brain.retriever:
+                    store = self.brain.retriever.store
+                    if store and store.documents:
+                        for doc in store.documents.values():
+                            if getattr(doc, 'failed', False):
+                                fallback = f"Sorry, Captain. I couldn't extract readable content from {doc.filename}. It may be scanned, protected, corrupted, or contain content this parser can't read yet."
+                                break
+                                
+                full_response = fallback
+                if speech_manager and speak:
+                    speech_manager.enqueue(full_response, SpeechPriority.NORMAL)
+            
+            # Handle File Generation
+            if "[GENERATE_FILE:" in full_response:
+                match = re.search(r"\[GENERATE_FILE:\s*(.+?)\](.*)", full_response, re.DOTALL)
+                if match:
+                    filename = match.group(1).strip()
+                    file_content = match.group(2).strip()
+                    ext = ""
+                    if "." in filename:
+                        parts = filename.rsplit(".", 1)
+                        ext = "." + parts[1]
+                        filename = parts[0]
+                        
+                    try:
+                        out_path = self.generator_manager.generate_file(file_content, filename, ext)
+                        success_msg = f"I have generated the file: {out_path.name}."
+                        full_response = success_msg
+                        if speech_manager and speak:
+                            speech_manager.enqueue(success_msg, SpeechPriority.NORMAL)
+                    except Exception as e:
+                        LOGGER.exception("Failed to generate file")
+                        full_response = f"I tried to generate the file, but encountered an error: {e}"
+                        if speech_manager and speak:
+                            speech_manager.enqueue(full_response, SpeechPriority.NORMAL)
+            
+            if speech_manager and speak and not is_generation_task:
                 speech_manager.set_streaming_session(False)
             
             if self.on_response:
@@ -268,17 +320,27 @@ class CommandRouter:
                 return self.on_vision_command("objects")
             return "Vision system is not attached."
 
-        remember = re.match(r"remember my (.+?) is (.+)", text)
+        # Explicit Memory Commands
+        remember = re.match(r"(?:please )?remember (?:that )?(.*)", text)
         if remember:
-            key, value = remember.groups()
-            self.memory.remember(key, value)
-            return f"I will remember your {key} is {value}."
+            content = remember.group(1).strip()
+            self.memory.remember(content)
+            return f"I will remember that {content}."
+            
+        forget = re.match(r"(?:please )?forget (?:that )?(.*)", text)
+        if forget:
+            content = forget.group(1).strip()
+            success = self.memory.forget(content)
+            if success:
+                return f"I have forgotten the information regarding: {content}."
+            else:
+                return f"I couldn't find any memory matching: {content}."
 
-        recall = re.match(r"what is my (.+)", text)
-        if recall:
-            key = recall.group(1).strip("? ")
-            value = self.memory.recall(key)
-            return f"Your {key} is {value}." if value else f"I do not know your {key} yet."
+        if "what do you remember about me" in text or "what are my preferences" in text:
+            mems = self.memory.list_memories()
+            if not mems:
+                return "I don't have any saved preferences or memories about you yet."
+            return "Here is what I remember:\n" + "\n".join(f"- {m}" for m in mems)
 
         # Entertainment — only match short, direct requests to avoid false positives
         # like "facts about quantum computing" or "is this a joke"
@@ -340,6 +402,7 @@ class CommandRouter:
 
         # 6. General Conversation
         LOGGER.info("Intent: General Conversation | Confidence: 0.85")
+        LOGGER.info("[ROUTER] route = local_ai")
         return self.brain.ask_stream(text)
 
     def _plan_search(self, text: str) -> dict | None:
@@ -362,7 +425,7 @@ class CommandRouter:
             "organizations).\n\n"
             "NO search needed for: greetings, general conversation, follow-ups that "
             "only rephrase or summarize previous answers, basic coding/math, asking "
-            "about time/date, or asking about the assistant's capabilities.\n\n"
+            "about time/date, asking about the assistant's capabilities, or asking about attached files/documents (e.g. 'summarize this pdf', 'what is in this presentation').\n\n"
             "YES search needed for: questions about specific people, places, "
             "organizations, current events, latest news, or follow-ups that reference "
             "a topic requiring NEW factual information (e.g., 'tell me more about him' "
@@ -397,66 +460,11 @@ class CommandRouter:
         """Perform a web search and pass results through the brain's grounded pipeline."""
         results = self.web_search.search(search_query)
         if not results:
-            return self.brain.ask_stream(text)
+            LOGGER.info("[ROUTER] route = local_ai")
+        return self.brain.ask_stream(text)
 
         context = "\n".join(f"- {r}" for r in results)
         return self.brain.ask_grounded_stream(text, context)
-
-    def _plan_search(self, text: str) -> dict | None:
-        """Ask the LLM whether a web search is needed, with conversation context."""
-        if not self.brain.model:
-            return None
-
-        # Include recent conversation so the LLM can resolve follow-ups
-        recent = self.brain.context.summary_for_planner()
-        context_block = f"\nRecent conversation:\n{recent}\n" if recent else ""
-
-        prompt = (
-            "You are an intent classifier. Decide whether the user's query requires "
-            "a web search for real-time information, latest news, current events, or "
-            "specific factual details about entities (people, places, companies, "
-            "organizations).\n\n"
-            "NO search needed for: greetings, general conversation, follow-ups that "
-            "only rephrase or summarize previous answers, basic coding/math, asking "
-            "about time/date, or asking about the assistant's capabilities.\n\n"
-            "YES search needed for: questions about specific people, places, "
-            "organizations, current events, latest news, or follow-ups that reference "
-            "a topic requiring NEW factual information (e.g., 'tell me more about him' "
-            "after discussing a person).\n\n"
-            "If search IS needed and the query is a follow-up, resolve any pronouns "
-            "or references using the conversation history and generate a complete, "
-            "self-contained search query.\n"
-            f"{context_block}"
-            f"\nCurrent user query: '{text}'\n\n"
-            "Output ONLY a JSON object with exactly two keys:\n"
-            '1. "needs_search": boolean\n'
-            '2. "search_query": string (optimized search query) or null\n'
-        )
-        payload = {
-            "model": self.brain.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "format": "json",
-            "stream": False,
-        }
-        try:
-            res = self.brain._request_json("/api/chat", payload, timeout=CONFIG.ai.response_timeout_seconds)
-            reply = res.get("message", {}).get("content", "").strip()
-            import json
-            plan = json.loads(reply)
-            LOGGER.info("Search plan: %s", plan)
-            return plan
-        except Exception as e:
-            LOGGER.error("Search planning failed: %s", e)
-            return None
-
-    def _handle_search(self, text: str, search_query: str) -> str:
-        """Perform a web search and pass results through the brain's grounded pipeline."""
-        results = self.web_search.search(search_query)
-        if not results:
-            return self.brain.ask(text)
-
-        context = "\n".join(f"- {r}" for r in results)
-        return self.brain.ask_grounded(text, context)
 
     def _system_status(self) -> str:
         status = self.system.status()
@@ -569,7 +577,8 @@ class CommandRouter:
         if not intel:
             return "Intelligence service is not running."
             
-        repo_path = "d:/Coding/Jarvis"
+        from shared.config import ConfigManager
+        repo_path = str(ConfigManager.PROJECT_ROOT)
         git_rep = intel.inspect("git", repo_path=repo_path)
         proj_rep = intel.inspect("project", project_path=repo_path)
         

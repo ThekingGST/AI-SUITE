@@ -30,10 +30,21 @@ APP_ALIASES = {
     "discord": "discord.exe",
     "copilot": "ms-copilot://",
     "settings": "ms-settings:",
-    "friday": ["python", "ai_suite/main.py", "--workspace", "friday"],
-    "jarvis": ["python", "ai_suite/main.py", "--workspace", "jarvis"],
-    "edith": ["python", "ai_suite/main.py", "--workspace", "edith"],
 }
+
+import sys
+from shared.config import PathManager
+
+def _get_workspace_command(workspace_name: str) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--workspace", workspace_name]
+    else:
+        main_py = str(PathManager.get_bundle_dir() / "ai_suite" / "main.py")
+        return [sys.executable, main_py, "--workspace", workspace_name]
+
+APP_ALIASES["friday"] = _get_workspace_command("friday")
+APP_ALIASES["jarvis"] = _get_workspace_command("jarvis")
+APP_ALIASES["edith"] = _get_workspace_command("edith")
 
 
 import random

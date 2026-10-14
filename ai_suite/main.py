@@ -61,15 +61,11 @@ def run_verification_suite():
         import torch
         import asyncio
         import numpy as np
-        
+        from shared.hardware.manager import HardwareManager
+        hw = HardwareManager()
+        hw.detect_all()
         log("\n==================== GPU DIAGNOSTICS ====================")
-        cuda_avail = torch.cuda.is_available()
-        log(f"[INFO] CUDA available: {cuda_avail}")
-        if cuda_avail:
-            log(f"[INFO] GPU: {torch.cuda.get_device_name(0)}")
-        log(f"[INFO] ONNX providers:")
-        for p in ort.get_available_providers():
-            log(f"       {p}")
+        log(f"[INFO] {hw.get_acceleration_summary()}")
         log("=========================================================\n")
         
         # Check Camera

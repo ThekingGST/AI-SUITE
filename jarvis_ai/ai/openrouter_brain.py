@@ -9,6 +9,7 @@ from jarvis_ai.ai.context_manager import ContextManager
 from jarvis_ai.ai.memory import MemoryStore
 from jarvis_ai.ai.personality import build_system_prompt, offline_reply
 from jarvis_ai.config import CONFIG
+from shared.documents.context import Retriever
 from jarvis_ai.utils.logger import LOGGER
 from shared.config.secrets_manager import SecretsManager
 
@@ -16,7 +17,8 @@ from shared.config.secrets_manager import SecretsManager
 class OpenRouterBrain:
     """Cloud LLM brain using direct HTTP requests to OpenRouter API."""
 
-    def __init__(self, memory: MemoryStore) -> None:
+    def __init__(self, memory: MemoryStore, retriever: Retriever = None) -> None:
+        self.retriever = retriever
         self.memory = memory
         self.context = ContextManager(CONFIG.ai.max_history_messages)
         self.context.load(memory.recent_messages(CONFIG.ai.max_history_messages))
@@ -35,6 +37,10 @@ class OpenRouterBrain:
         return "".join(tokens)
 
     def ask_stream(self, prompt: str) -> Iterator[str]:
+        import time
+        t_start = time.perf_counter()
+        LOGGER.info("[BRAIN] ask_stream (OpenRouter) started")
+        
         api_key = SecretsManager().get_secret("OPENROUTER_API_KEY")
         if not api_key:
             reply = "Cloud AI requires an OpenRouter API key. Add your key in Settings -> AI Providers."
@@ -44,7 +50,29 @@ class OpenRouterBrain:
 
         self.memory.add_message("user", prompt)
         self.context.add("user", prompt)
-        messages = [{"role": "system", "content": build_system_prompt()}, *self.context.messages()]
+        system_content = build_system_prompt()
+        
+        # Inject relevant active long-term memories
+        t0 = time.perf_counter()
+        relevant_memories = self.memory.search_memories(prompt, limit=5)
+        t_mem = (time.perf_counter() - t0) * 1000
+        LOGGER.info("[TIMING] Memory search: %.2f ms", t_mem)
+        
+        if relevant_memories:
+            mem_text = "\n".join(f"- {m}" for m in relevant_memories)
+            mem_block = f"\n\n<LONG_TERM_MEMORY>\n{mem_text}\n</LONG_TERM_MEMORY>"
+            system_content += mem_block
+            LOGGER.info("[BRAIN] Injected %d memories: %s", len(relevant_memories), mem_block.strip())
+            
+        t0 = time.perf_counter()
+        if self.retriever:
+            doc_context = self.retriever.retrieve(prompt)
+            if doc_context:
+                system_content += "\n\n" + doc_context
+        t_doc = (time.perf_counter() - t0) * 1000
+        LOGGER.info("[TIMING] Document search: %.2f ms", t_doc)
+                
+        messages = [{"role": "system", "content": system_content}, *self.context.messages()]
 
         payload = {
             "model": self.model,
@@ -65,7 +93,12 @@ class OpenRouterBrain:
                 },
                 method="POST",
             )
+            t0 = time.perf_counter()
             with urllib.request.urlopen(req, timeout=CONFIG.ai.response_timeout_seconds) as response:
+                t_conn = (time.perf_counter() - t0) * 1000
+                LOGGER.info("[TIMING] LLM connection: %.2f ms", t_conn)
+                
+                first_token = True
                 for line in response:
                     if not line:
                         continue
@@ -82,10 +115,16 @@ class OpenRouterBrain:
                         if choices:
                             token = choices[0].get("delta", {}).get("content", "")
                             if token:
+                                if first_token:
+                                    t_ttft = (time.perf_counter() - t0) * 1000
+                                    LOGGER.info("[TIMING] Time to first token: %.2f ms", t_ttft)
+                                    first_token = False
                                 full_response.append(token)
                                 yield token
                     except json.JSONDecodeError:
                         continue
+            t_gen = (time.perf_counter() - t0) * 1000
+            LOGGER.info("[TIMING] Total LLM generation: %.2f ms", t_gen)
         except (urllib.error.URLError, TimeoutError) as exc:
             LOGGER.error("OpenRouter inference failed: %s", exc)
             yield offline_reply(prompt)

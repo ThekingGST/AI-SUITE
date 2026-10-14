@@ -74,7 +74,7 @@ class SystemControl:
         
         if not path:
             from jarvis_ai.config import SCREENSHOT_DIR
-            from utils.helpers import timestamp_slug
+            from jarvis_ai.utils.helpers import timestamp_slug
 
             path = str(SCREENSHOT_DIR / f"screenshot_{timestamp_slug()}.png")
         image.save(path)

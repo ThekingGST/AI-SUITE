@@ -71,9 +71,16 @@ class BootWorker(QThread):
             from ai_suite.core.memory.storage import SQLiteStorageProvider
             from ai_suite.core.memory.engine import MemoryEngine
             from ai_suite.core.memory.context import ContextBuilder
-            storage_provider = SQLiteStorageProvider()
+            from shared.config.config_manager import ConfigManager
+            
+            storage_provider = SQLiteStorageProvider(db_path=ConfigManager.MEMORY_DB)
             memory_engine = MemoryEngine(event_bus, storage_provider)
             context_builder = ContextBuilder(memory_engine)
+            
+            # --- STAGE: HARDWARE ---
+            from shared.hardware.manager import HardwareManager
+            hw = HardwareManager()
+            hw.detect_all()
             
             # --- STAGE: INTELLIGENCE ---
             self.stage_complete.emit(BootStage.INTELLIGENCE)

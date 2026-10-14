@@ -1,9 +1,8 @@
-
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 from ai_suite.core.registry import ServiceContainer
 from ai_suite.core.memory.engine import MemoryEngine
@@ -14,88 +13,60 @@ from jarvis_ai.utils.logger import LOGGER
 class MemoryStore:
     """Thin adapter mapping legacy Jarvis memory onto the shared AI Suite MemoryEngine."""
 
-    def __init__(self, db_path: Path = MEMORY_DB) -> None:
+    def __init__(self, db_path: Path = MEMORY_DB, assistant_id: str = "jarvis") -> None:
         self.db_path = db_path
-        LOGGER.info("Legacy MemoryStore initialized as adapter.")
+        self.assistant_id = assistant_id
+        # Temporary conversation history list (Pillar 1) so it doesn't pollute long-term SQLite
+        self._conversation_history = []
+        LOGGER.info(f"MemoryStore initialized for assistant: {assistant_id}")
 
     @property
     def _engine(self) -> MemoryEngine:
         return ServiceContainer.get(MemoryEngine)
 
-    def remember(self, key: str, value: Any) -> None:
-        normalized_key = key.strip().lower()
-        payload = json.dumps(value, ensure_ascii=False)
-        
+    def remember(self, content: str, source: str = "user_chat") -> None:
+        """Create an explicit persistent memory."""
         metadata = MemoryMetadata(
-            scope=MemoryScope.GLOBAL,
+            scope=MemoryScope.ASSISTANT,
             type=MemoryType.PREFERENCE,
-            source="user_chat",
-            tags=[f"key:{normalized_key}"]
+            source=source,
+            assistant_id=self.assistant_id,
+            tags=[]
         )
-        
-        # We need to simulate 'upsert'. Find existing and update, or store new.
-        existing = self._engine.search(scope=MemoryScope.GLOBAL, type=MemoryType.PREFERENCE, tags=[f"key:{normalized_key}"])
-        if existing:
-            item = existing[0]
-            item.content = payload
-            self._engine.update(item)
+        res = self._engine.store(content=content, metadata=metadata)
+        if res:
+            LOGGER.info("Memory saved: %s", content)
         else:
-            self._engine.store(content=payload, metadata=metadata)
-            
-        LOGGER.info("Memory saved via adapter: %s", normalized_key)
+            LOGGER.warning("Memory rejected: %s", content)
 
-    def recall(self, key: str) -> Any | None:
-        normalized_key = key.strip().lower()
-        items = self._engine.search(scope=MemoryScope.GLOBAL, type=MemoryType.PREFERENCE, tags=[f"key:{normalized_key}"])
-        if not items:
-            return None
-            
-        try:
-            return json.loads(items[0].content)
-        except json.JSONDecodeError:
-            return items[0].content
-
-    def search_preferences(self, query: str) -> list[tuple[str, Any]]:
-        # This is a bit tricky to map perfectly to exact string match.
-        # We'll just return all preferences and filter in python.
-        items = self._engine.search(scope=MemoryScope.GLOBAL, type=MemoryType.PREFERENCE)
-        result = []
-        like = query.strip().lower()
+    def search_memories(self, query: str, limit: int = 5) -> List[str]:
+        """Search active relevant memories."""
+        results = self._engine.search(query=query, assistant_id=self.assistant_id, limit=limit)
+        return [r.content for r in results]
         
-        for item in items:
-            tag_key = next((t.split("key:")[1] for t in item.metadata.tags if t.startswith("key:")), None)
-            if tag_key and like in tag_key:
-                try:
-                    val = json.loads(item.content)
-                except json.JSONDecodeError:
-                    val = item.content
-                result.append((tag_key, val))
-                
-        return result
+    def list_memories(self) -> List[str]:
+        """Get all active memories for transparency."""
+        results = self._engine.get_all(assistant_id=self.assistant_id)
+        return [r.content for r in results]
+
+    def forget(self, query: str) -> bool:
+        """Find relevant memories matching the exact intent and deactivate them all."""
+        results = self._engine.search(query=query, assistant_id=self.assistant_id, limit=50, operator="AND")
+        if results:
+            for r in results:
+                self._engine.deactivate(r.id)
+                LOGGER.info("Memory deactivated: %s", r.content)
+            return True
+        return False
 
     def add_message(self, role: str, content: str) -> None:
-        metadata = MemoryMetadata(
-            scope=MemoryScope.SESSION,
-            type=MemoryType.CONVERSATION,
-            source="user_chat",
-            assistant_id="jarvis"
-        )
-        self._engine.store(content=content, metadata=metadata, role=role)
+        """Conversation history is strictly ephemeral now (Pillar 1)."""
+        self._conversation_history.append({"role": role, "content": content})
 
     def recent_messages(self, limit: int = 16) -> list[dict[str, str]]:
-        # MemoryEngine search returns oldest first because of created_at ASC
-        # but retriever logic gives us standard chronologically sorted items
-        items = self._engine.search(scope=MemoryScope.SESSION, type=MemoryType.CONVERSATION, assistant_id="jarvis")
-        # Legacy expected oldest first historically, actually no, the caller reverses it! 
-        # Wait, legacy returns chronologically oldest first up to limit.
-        recent = items[-limit:]
-        return [{"role": item.role, "content": item.content} for item in recent if item.role]
+        return self._conversation_history[-limit:]
 
     def log_event(self, event_type: str, payload: dict[str, Any]) -> None:
-        metadata = MemoryMetadata(
-            scope=MemoryScope.GLOBAL,
-            type=MemoryType.OBSERVATION,
-            source="system_event",
-            tags=[f"event:{event_type}"]
-        )
-        self._engine.store(content=json.dumps(payload, ensure_ascii=False), metadata=metadata)
+        # We can drop this or log it to a separate table/file, but to avoid 
+        # database bloat with ephemeral logs, we just log to standard logger.
+        LOGGER.debug(f"[OBSERVATION] {event_type}: {payload}")

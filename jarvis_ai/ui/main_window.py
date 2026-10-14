@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QSizePolicy,
     QInputDialog,
+    QFileDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -43,6 +44,9 @@ from jarvis_ai.voice.listener import TextCommandBus, VoiceListener
 from jarvis_ai.voice.speaker import Speaker
 from jarvis_ai.voice.v2.events import VoiceEvent
 from jarvis_ai.voice.wakeword import WakeWordDetector
+from shared.documents.context import DocumentStore, Retriever
+from shared.documents.processor import DocumentProcessorWorker
+from pathlib import Path
 
 
 
@@ -62,11 +66,14 @@ class JarvisContentWidget(QWidget):
         self.setStyleSheet(HOLOGRAM_QSS)
 
         self.memory = MemoryStore()
+        self.document_store = DocumentStore()
+        self._doc_workers = []
+        self.retriever = Retriever(self.document_store)
         provider = SettingsManager().get("ai_provider", "local")
         if provider == "cloud":
-            self.brain = OpenRouterBrain(self.memory)
+            self.brain = OpenRouterBrain(self.memory, self.retriever)
         else:
-            self.brain = OllamaBrain(self.memory)
+            self.brain = OllamaBrain(self.memory, self.retriever)
         self.speaker = Speaker()
         self.tts_enabled = True
         self.mic_enabled = True
@@ -156,11 +163,23 @@ class JarvisContentWidget(QWidget):
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText("Type a command or question...")
         self.command_input.returnPressed.connect(self._submit_text_command)
+        
+        self.attach_button = ControlChip("paperclip", "")
+        self.attach_button.setFixedWidth(50)
+        self.attach_button.setToolTip("Attach File")
+        self.attach_button.clicked.connect(self._attach_file)
+        
         send_button = ControlChip("send", "Transmit")
         send_button.clicked.connect(self._submit_text_command)
+        
         input_row = QHBoxLayout()
+        input_row.addWidget(self.attach_button)
         input_row.addWidget(self.command_input, 1)
         input_row.addWidget(send_button)
+        
+        self.attached_files_layout = QHBoxLayout()
+        self.attached_files_layout.addStretch()
+
         chat_panel = Panel()
         chat_layout = QVBoxLayout(chat_panel)
         chat_layout.addWidget(QLabel("AI CONSOLE"))
@@ -181,6 +200,7 @@ class JarvisContentWidget(QWidget):
         chat_layout.addLayout(indicator_row)
         chat_layout.addWidget(self.chat, 1)
         chat_layout.addWidget(self.waveform)
+        chat_layout.addLayout(self.attached_files_layout)
         chat_layout.addLayout(input_row)
 
         self.logs = QListWidget()
@@ -285,7 +305,6 @@ class JarvisContentWidget(QWidget):
                 LOGGER.info("ROUTING COMMAND: %s", command)
                 self.command_bus.submit(command)
             else:
-                print("DEBUG TTS:", "Yes?")
                 self.speaker.speak("Yes?")
         else:
             # If JARVIS is currently speaking, and there is no wake word and no fast-path interrupt,
@@ -314,7 +333,66 @@ class JarvisContentWidget(QWidget):
             finally:
                 self.set_status.emit("Systems online")
 
+
+    def _attach_file(self) -> None:
+        filepath, _ = QFileDialog.getOpenFileName(self, "Select Document", "", "All Files (*)")
+        if not filepath:
+            return
+            
+        path = Path(filepath)
+        self.append_log.emit(f"[INFO] Parsing {path.name}...")
+        
+        worker = DocumentProcessorWorker(self.document_store, path)
+        self._doc_workers.append(worker)
+        
+        def on_finished(doc, w=worker):
+            if w in self._doc_workers:
+                self._doc_workers.remove(w)
+            w.finished_doc.disconnect()
+            w.error.disconnect()
+            w.deleteLater()
+            self._on_file_attached(doc)
+            
+        def on_error(e, w=worker):
+            if w in self._doc_workers:
+                self._doc_workers.remove(w)
+            w.finished_doc.disconnect()
+            w.error.disconnect()
+            w.deleteLater()
+            self.append_log.emit(f"[ERROR] Parse failed: {e}")
+            
+        worker.finished_doc.connect(on_finished)
+        worker.error.connect(on_error)
+        worker.start()
+
+    def _on_file_attached(self, doc) -> None:
+        self.append_log.emit(f"[INFO] Attached {doc.filename} ({len(doc.chunks)} chunks)")
+        
+        if getattr(doc, 'failed', False):
+            display_text = f"{doc.filename} (FAILED) \xd7"
+            tooltip = f"Unreadable: {getattr(doc, 'error_reason', 'Unknown error')}"
+            self.append_log.emit(f"[WARNING] Could not extract readable content from {doc.filename}. {getattr(doc, 'error_reason', '')}")
+            self.append_chat.emit("JARVIS", f"I couldn't extract readable content from {doc.filename}. It may be scanned, protected, corrupted, or empty.")
+        else:
+            display_text = f"{doc.filename} \xd7"
+            tooltip = f"Remove {doc.filename}"
+            
+        chip = ControlChip("file-text", display_text)
+        chip.setToolTip(tooltip)
+        if getattr(doc, 'failed', False):
+            chip.setStyleSheet("background-color: #5a1a1a; color: #ffcccc; border-radius: 12px; padding: 4px 8px;")
+        
+        # Click to remove
+        def remove_doc(checked=False, d_id=doc.doc_id, f_name=doc.filename, c=chip):
+            if self.document_store.remove_file(d_id):
+                c.deleteLater()
+                self.append_log.emit(f"[INFO] Removed {f_name}")
+            
+        chip.clicked.connect(remove_doc)
+        self.attached_files_layout.insertWidget(self.attached_files_layout.count() - 1, chip)
+
     def _submit_text_command(self) -> None:
+
         text = self.command_input.text().strip()
         if text:
             self.command_input.clear()
@@ -387,47 +465,6 @@ class JarvisContentWidget(QWidget):
             self.detection_indicator,
             det_text,
             det_active,
-        )
-        snapshot = self.camera.vision.snapshot()
-        known = [(label, score) for _, label, score in snapshot.identities if label != "unknown"]
-        if known:
-            name, score = max(known, key=lambda item: item[1])
-            self._style_indicator(self.identity_indicator, f"Identity: {name.upper()}", True)
-            self._style_indicator(self.confidence_indicator, f"Confidence: {score:.2f}", True)
-        else:
-            self._style_indicator(self.identity_indicator, "Identity: UNKNOWN", False)
-            self._style_indicator(self.confidence_indicator, "Confidence: 0.00", False)
-
-    def _update_live_indicators(self) -> None:
-        self._sync_mic_with_speech()
-        if self.speaker.is_speaking:
-            self.ai_orb.set_state(OrbState.SPEAKING)
-        if self.speaker.is_speaking and not self._was_speaking:
-            self.append_log.emit("Speaking...")
-        if not self.speaker.is_speaking and self._was_speaking:
-            self.ai_orb.set_state(OrbState.IDLE if self.camera_enabled else OrbState.CAMERA_DISABLED)
-        self._was_speaking = self.speaker.is_speaking
-        self._style_indicator(
-            self.speaking_indicator,
-            "Speaking..." if self.speaker.is_speaking else "Speaking: Idle",
-            self.speaker.is_speaking,
-        )
-        if self.tts_enabled:
-            mode_label = "Premium" if self.speaker.voice_mode == "premium" else "Standard"
-            engine = self.speaker.active_engine_name.title()
-            self._style_indicator(self.muted_indicator, f"Voice: {mode_label} ({engine})", True)
-        else:
-            self.muted_indicator.setText("Muted")
-            self.muted_indicator.setStyleSheet("color: #ffe8ec; border: 1px solid #ff4057; border-radius: 5px; padding: 3px; background: rgba(95, 15, 24, 150);")
-        if self.mic_enabled:
-            self._style_indicator(self.mic_indicator, "Mic: Active", True)
-        else:
-            self.mic_indicator.setText("Mic: Muted")
-            self.mic_indicator.setStyleSheet("color: #ffe8ec; border: 1px solid #ff4057; border-radius: 5px; padding: 3px; background: rgba(95, 15, 24, 150);")
-        self._style_indicator(
-            self.detection_indicator,
-            "Detection Active" if self.camera.vision.object_detection_enabled else "Detection Disabled",
-            self.camera.vision.object_detection_enabled,
         )
         snapshot = self.camera.vision.snapshot()
         known = [(label, score) for _, label, score in snapshot.identities if label != "unknown"]
