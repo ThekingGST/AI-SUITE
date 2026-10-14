@@ -4,7 +4,7 @@ import logging
 import sys
 from logging.handlers import RotatingFileHandler
 
-from config import DATA_DIR, ensure_directories
+from jarvis_ai.config import DATA_DIR, ensure_directories
 
 
 def setup_logging() -> logging.Logger:

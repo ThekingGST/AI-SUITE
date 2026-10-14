@@ -1,7 +1,7 @@
 import urllib.request
 import urllib.error
 from ddgs import DDGS
-from utils.logger import LOGGER
+from jarvis_ai.utils.logger import LOGGER
 
 class WebSearch:
     """Provides real-time web search and current information retrieval."""

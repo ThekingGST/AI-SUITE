@@ -5,7 +5,7 @@ import threading
 from collections.abc import Callable
 from typing import Generic, TypeVar
 
-from utils.logger import LOGGER
+from jarvis_ai.utils.logger import LOGGER
 
 T = TypeVar("T")
 

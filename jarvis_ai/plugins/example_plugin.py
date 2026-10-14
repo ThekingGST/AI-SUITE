@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from plugins.registry import PluginCommand, PluginRegistry
+from jarvis_ai.plugins.registry import PluginCommand, PluginRegistry
 
 
 def register(registry: PluginRegistry) -> None:

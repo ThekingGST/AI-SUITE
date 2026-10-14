@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from config import CONFIG
-from utils.helpers import normalize_text
+from jarvis_ai.config import CONFIG
+from jarvis_ai.utils.helpers import normalize_text
 
 
 class WakeWordDetector:

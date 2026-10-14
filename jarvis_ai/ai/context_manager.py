@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from config import CONFIG
+from jarvis_ai.config import CONFIG
 
 
 class ContextManager:

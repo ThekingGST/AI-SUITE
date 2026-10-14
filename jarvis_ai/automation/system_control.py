@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import psutil
 import pyautogui
 
-from utils.helpers import clamp, is_windows
-from utils.logger import LOGGER
+from jarvis_ai.utils.helpers import clamp, is_windows
+from jarvis_ai.utils.logger import LOGGER
 
 
 @dataclass
@@ -22,16 +22,23 @@ class SystemStatus:
 
 class SystemControl:
     def status(self) -> SystemStatus:
-        battery = psutil.sensors_battery()
-        battery_text = "Battery unavailable"
-        if battery:
-            plugged = "charging" if battery.power_plugged else "on battery"
-            battery_text = f"{battery.percent:.0f}% {plugged}"
+        from ai_suite.core.registry import ServiceContainer
+        from ai_suite.intelligence import IntelligenceService
+        
+        intel = ServiceContainer.get(IntelligenceService)
+        if not intel:
+            return SystemStatus(0.0, 0.0, "unavailable", "unavailable")
+            
+        cpu = intel.inspect("cpu").metrics.get("usage_percent", 0.0)
+        ram = intel.inspect("memory").metrics.get("usage_percent", 0.0)
+        bat_report = intel.inspect("battery")
+        net_report = intel.inspect("network")
+        
         return SystemStatus(
-            cpu=psutil.cpu_percent(interval=None),
-            ram=psutil.virtual_memory().percent,
-            battery=battery_text,
-            wifi=self._wifi_status(),
+            cpu=cpu,
+            ram=ram,
+            battery=bat_report.summary,
+            wifi=net_report.summary
         )
 
     def lock(self) -> str:
@@ -41,11 +48,11 @@ class SystemControl:
         return "Lock workstation is optimized for Windows."
 
     def shutdown(self) -> str:
-        subprocess.Popen(["shutdown", "/s", "/t", "5"], shell=False)
+        subprocess.Popen(["shutdown", "/s", "/t", "5"], shell=False, creationflags=0x08000000)
         return "Shutdown scheduled in five seconds."
 
     def restart(self) -> str:
-        subprocess.Popen(["shutdown", "/r", "/t", "5"], shell=False)
+        subprocess.Popen(["shutdown", "/r", "/t", "5"], shell=False, creationflags=0x08000000)
         return "Restart scheduled in five seconds."
 
     def set_volume_relative(self, direction: str, steps: int = 5) -> str:
@@ -59,10 +66,15 @@ class SystemControl:
         return "Audio mute toggled."
 
     def screenshot(self, path: str | None = None) -> str:
-        image = pyautogui.screenshot()
+        try:
+            image = pyautogui.screenshot()
+        except Exception as exc:
+            LOGGER.warning("Screenshot failed: %s", exc)
+            return "I could not take a screenshot."
+        
         if not path:
-            from config import SCREENSHOT_DIR
-            from utils.helpers import timestamp_slug
+            from jarvis_ai.config import SCREENSHOT_DIR
+            from jarvis_ai.utils.helpers import timestamp_slug
 
             path = str(SCREENSHOT_DIR / f"screenshot_{timestamp_slug()}.png")
         image.save(path)
@@ -78,30 +90,13 @@ class SystemControl:
                     "-Command",
                     f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{percent})",
                 ],
-                check=True,
-                capture_output=True,
-                text=True,
+                check=False,
+                creationflags=0x08000000,
             )
             return f"Brightness set to {percent}%."
         except Exception as exc:
             LOGGER.warning("Brightness control failed: %s", exc)
             return "Brightness control is not available on this display."
-
-    @staticmethod
-    def _wifi_status() -> str:
-        try:
-            result = subprocess.run(
-                ["netsh", "wlan", "show", "interfaces"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            output = result.stdout.lower()
-            if "state" in output and "connected" in output:
-                return "connected"
-            return "disconnected"
-        except Exception:
-            return "unknown"
 
 
 def close_process_by_name(name: str) -> str:
