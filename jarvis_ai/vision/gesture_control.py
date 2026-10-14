@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 import pyautogui
 
-from config import CONFIG
-from utils.logger import LOGGER
+from jarvis_ai.config import CONFIG
+from jarvis_ai.utils.logger import LOGGER
 
 
 class GestureController:
@@ -28,6 +28,9 @@ class GestureController:
             LOGGER.warning("Gesture controller unavailable: %s", exc)
 
     def process(self, frame: np.ndarray) -> str | None:
+        if frame is None or frame.size == 0:
+            return None
+
         if self.hands is None:
             return None
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

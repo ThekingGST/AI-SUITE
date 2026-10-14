@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import Any
 
 import cv2
 
-from config import MODELS_DIR
-from utils.logger import LOGGER
+from jarvis_ai.config import MODELS_DIR
+from jarvis_ai.utils.logger import LOGGER
 
 
 class ModelManager:
@@ -27,12 +26,17 @@ class ModelManager:
         self._lock = threading.RLock()
         self._cache: dict[str, Any] = {}
 
+    def release_all(self) -> None:
+        with self._lock:
+            self._cache.clear()
+            LOGGER.info("All heavy AI models released from memory.")
+
     def get_face_detector(self) -> Any | None:
         with self._lock:
             if "face_detector" in self._cache:
                 return self._cache["face_detector"]
-            prototxt = Path(MODELS_DIR / "deploy.prototxt")
-            caffemodel = Path(MODELS_DIR / "res10_300x300_ssd_iter_140000.caffemodel")
+            prototxt = MODELS_DIR / "deploy.prototxt"
+            caffemodel = MODELS_DIR / "res10_300x300_ssd_iter_140000.caffemodel"
             if not prototxt.exists() or not caffemodel.exists():
                 LOGGER.warning("Face detector models missing in %s", MODELS_DIR)
                 self._cache["face_detector"] = None
@@ -47,22 +51,57 @@ class ModelManager:
                 self._cache["face_detector"] = None
                 return None
 
+    def get_yunet_detector(self) -> Any | None:
+        with self._lock:
+            if "yunet" in self._cache:
+                return self._cache["yunet"]
+            model = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
+            if not model.exists():
+                LOGGER.warning("YuNet ONNX model missing in %s", MODELS_DIR)
+                self._cache["yunet"] = None
+                return None
+            try:
+                # Default input size (will be updated dynamically per frame if needed)
+                detector = cv2.FaceDetectorYN.create(
+                    model=str(model),
+                    config="",
+                    input_size=(320, 320),
+                    score_threshold=0.6,
+                    nms_threshold=0.3,
+                    top_k=5000,
+                )
+                self._cache["yunet"] = detector
+                LOGGER.info("YuNet Face detector loaded.")
+                return detector
+            except Exception as exc:
+                LOGGER.warning("YuNet load failed: %s", exc)
+                self._cache["yunet"] = None
+                return None
+
     def get_sface_session(self) -> tuple[Any | None, str]:
         with self._lock:
             if "sface" in self._cache:
                 return self._cache["sface"]
-            model = Path(MODELS_DIR / "face_recognition_sface_2021dec.onnx")
+            model = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
             if not model.exists():
                 LOGGER.warning("SFace ONNX model missing: %s", model)
                 self._cache["sface"] = (None, "")
                 return self._cache["sface"]
             try:
                 import onnxruntime as ort
-
-                session = ort.InferenceSession(str(model), providers=["CPUExecutionProvider"])
+                
+                available_providers = ort.get_available_providers()
+                providers = []
+                if "CUDAExecutionProvider" in available_providers:
+                    providers.append("CUDAExecutionProvider")
+                providers.append("CPUExecutionProvider")
+                
+                session = ort.InferenceSession(str(model), providers=providers)
                 input_name = session.get_inputs()[0].name
                 self._cache["sface"] = (session, input_name)
-                LOGGER.info("SFace recognizer loaded.")
+                
+                active_providers = session.get_providers()
+                LOGGER.info("SFace recognizer loaded. Providers: %s", active_providers)
                 return self._cache["sface"]
             except Exception as exc:
                 LOGGER.warning("SFace model failed to load: %s", exc)
@@ -73,19 +112,28 @@ class ModelManager:
         with self._lock:
             if "yolo" in self._cache:
                 return self._cache["yolo"]
-            model_path = Path(MODELS_DIR / "yolov8n.pt")
+            model_path = MODELS_DIR / "yolov8n.pt"
             if not model_path.exists():
                 LOGGER.warning("YOLO model missing: %s", model_path)
                 self._cache["yolo"] = None
                 return None
             try:
                 from ultralytics import YOLO
+                import torch
+
+                cuda_avail = torch.cuda.is_available()
+                gpu_name = torch.cuda.get_device_name(0) if cuda_avail else "None"
+                cuda_version = torch.version.cuda if cuda_avail else "None"
+                
+                LOGGER.info("GPU Check -> CUDA Available: %s, GPU: %s, CUDA Version: %s", cuda_avail, gpu_name, cuda_version)
 
                 model = YOLO(str(model_path))
+                device = "cuda:0" if cuda_avail else "cpu"
+                model.to(device)
                 self._cache["yolo"] = model
-                LOGGER.info("YOLOv8 object detector loaded.")
+                LOGGER.info("YOLOv8 object detector loaded. Exact YOLO device selected: %s", model.device)
                 return model
             except Exception as exc:
-                LOGGER.warning("YOLO load failed: %s", exc)
+                LOGGER.error("YOLO load failed: %s", exc)
                 self._cache["yolo"] = None
-                return None
+                raise RuntimeError(f"YOLO load failed: {exc}") from exc

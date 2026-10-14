@@ -4,8 +4,8 @@ import time
 
 import numpy as np
 
-from config import CONFIG
-from utils.logger import LOGGER
+from jarvis_ai.config import CONFIG
+from jarvis_ai.utils.logger import LOGGER
 
 
 class EmotionDetector:

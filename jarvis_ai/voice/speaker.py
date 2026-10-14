@@ -1,126 +1,152 @@
 from __future__ import annotations
 
 import queue
+import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
-from config import CONFIG
-from utils.logger import LOGGER
+from jarvis_ai.config import CONFIG, DATA_DIR
+from jarvis_ai.utils.logger import LOGGER
 
+# ---------------------------------------------------------------------------
+# Voice-mode persistence
+# ---------------------------------------------------------------------------
+
+_VOICE_MODE_FILE = DATA_DIR / "voice_mode.txt"
+
+_MODE_TO_PROFILE = {
+    "standard": "jarvis",
+    "premium": "jarvis",
+    "jarvis": "jarvis",
+    "friday": "friday",
+    "edith": "edith",
+}
+
+def _load_voice_mode() -> str:
+    """Load persisted voice mode.  Returns ``'standard'`` or ``'premium'``."""
+    try:
+        mode = _VOICE_MODE_FILE.read_text(encoding="utf-8").strip().lower()
+        if mode in _MODE_TO_PROFILE:
+            return mode
+    except (FileNotFoundError, OSError):
+        pass
+    return "standard"
+
+
+def _save_voice_mode(mode: str) -> None:
+    """Persist the current voice mode to disk."""
+    try:
+        _VOICE_MODE_FILE.write_text(mode, encoding="utf-8")
+    except OSError as exc:
+        LOGGER.warning("Failed to save voice mode: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Speech job
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SpeechJob:
+    text: str | None = None
+    shutdown: bool = False
+    switch_mode: str | None = None  # "standard" or "premium"
+
+
+# ---------------------------------------------------------------------------
+# Speaker (V2 Compatibility Layer)
+# ---------------------------------------------------------------------------
 
 class Speaker:
-    """Thread-safe pyttsx3 speech queue with interruption support."""
+    """Legacy API preserved for backward compatibility.
+    
+    Internally delegates to the V2 SpeechManager. Existing callers
+    do not need to be updated immediately.
+    """
 
     def __init__(self) -> None:
-        self._queue: queue.Queue[str | None] = queue.Queue()
-        self._stop_event = threading.Event()
-        self._state_lock = threading.RLock()
-        self._enabled = True
-        self._speaking = False
-        self._last_spoken_at = 0.0
-        self._thread = threading.Thread(target=self._run, name="JarvisSpeaker", daemon=True)
-        self._engine: Any | None = None
-        self._thread.start()
+        from jarvis_ai.voice.v2.speech_manager import SpeechManager
+        from jarvis_ai.voice.v2.events import VoiceEventBus
+        from jarvis_ai.voice.v2.backends.registry import TTSBackendRegistry
+        from jarvis_ai.voice.v2.backends.edge_tts_backend import EdgeTtsBackend
+        from jarvis_ai.voice.v2.profile import DEFAULT_PROFILES
+        from jarvis_ai.config import CONFIG
+        
+        self.event_bus = VoiceEventBus()
+        self.registry = TTSBackendRegistry()
+        
+        # Register Edge-TTS
+        self.registry.register(CONFIG.voice.default_tts_backend, EdgeTtsBackend())
+        
+        # Register Pyttsx3 (Offline Fallback)
+        from jarvis_ai.voice.v2.backends.pyttsx3_backend import Pyttsx3Backend
+        self.registry.register("pyttsx3", Pyttsx3Backend())
+        
+        # Note: ElevenLabs backend exists in codebase but is intentionally
+        # disabled and not initialized in production per requirements.
+            
+        self._speech_manager = SpeechManager(self.registry, self.event_bus)
+        
+        # Load persisted mode and apply
+        self._voice_mode: str = _load_voice_mode()
+        profile_name = _MODE_TO_PROFILE.get(self._voice_mode, "jarvis")
+        self._speech_manager.set_profile(DEFAULT_PROFILES[profile_name])
+        
+        # Start worker
+        self._speech_manager.start()
+        
+        self.speak("Systems online.")
 
     @property
     def enabled(self) -> bool:
-        with self._state_lock:
-            return self._enabled
+        return self._speech_manager.enabled
+
+    @property
+    def is_speaking(self) -> bool:
+        return self._speech_manager.is_speaking
+
+    @property
+    def active_engine_name(self) -> str:
+        return self._speech_manager.active_profile_name
+
+    @property
+    def voice_mode(self) -> str:
+        return self._speech_manager.voice_mode
+
+    @property
+    def manager(self):
+        """Allow direct access to the underlying SpeechManager."""
+        return self._speech_manager
 
     def set_enabled(self, enabled: bool) -> None:
-        """Enable or disable queued speech without recreating the TTS engine."""
-        with self._state_lock:
-            self._enabled = enabled
-        if not enabled:
-            LOGGER.info("TTS muted.")
-            self.interrupt()
+        self._speech_manager.set_enabled(enabled)
+
+    def set_voice_mode(self, mode: str) -> None:
+        if mode not in _MODE_TO_PROFILE:
+            LOGGER.warning("Unknown voice mode: %s", mode)
+            return
+        if mode == self._voice_mode:
+            return
+        self._voice_mode = mode
+        _save_voice_mode(mode)
+        
+        from jarvis_ai.voice.v2.profile import DEFAULT_PROFILES
+        profile_name = _MODE_TO_PROFILE.get(mode, "offline")
+        self._speech_manager.set_profile(DEFAULT_PROFILES[profile_name])
 
     def say(self, text: str) -> None:
         self.speak(text)
 
     def speak(self, text: str) -> None:
-        """Queue speech asynchronously through the single shared TTS worker."""
-        cleaned = text.strip()
-        if not cleaned:
-            return
-        if not self.enabled:
-            LOGGER.info("TTS muted.")
-            return
-        LOGGER.info("Speaking response...")
-        self._queue.put(cleaned)
-        LOGGER.info("Speech queue active.")
+        from jarvis_ai.voice.v2.types import SpeechPriority
+        self._speech_manager.enqueue(text, SpeechPriority.NORMAL)
 
-    @property
-    def is_speaking(self) -> bool:
-        with self._state_lock:
-            return self._speaking
-
-    def recently_spoke(self, seconds: float = 0.8) -> bool:
-        with self._state_lock:
-            return self._speaking or (time.time() - self._last_spoken_at) < seconds
+    def recently_spoke(self, seconds: float = 1.0) -> bool:
+        return self._speech_manager.recently_spoke(seconds)
 
     def interrupt(self) -> None:
-        self._stop_event.set()
-        try:
-            while True:
-                self._queue.get_nowait()
-        except queue.Empty:
-            pass
-        if self._engine:
-            try:
-                self._engine.stop()
-            except Exception:
-                pass
+        self._speech_manager.interrupt()
 
     def close(self) -> None:
-        self._queue.put(None)
-        self._thread.join(timeout=2)
-
-    def _run(self) -> None:
-        com_initialized = False
-        try:
-            try:
-                import pythoncom
-
-                pythoncom.CoInitialize()
-                com_initialized = True
-            except Exception:
-                pythoncom = None  # type: ignore[assignment]
-
-            import pyttsx3
-
-            self._engine = pyttsx3.init()
-            self._engine.setProperty("rate", CONFIG.voice.speech_rate)
-            self._engine.setProperty("volume", CONFIG.voice.speech_volume)
-        except Exception as exc:
-            LOGGER.warning("TTS engine unavailable: %s", exc)
-            self._engine = None
-
-        while True:
-            text = self._queue.get()
-            if text is None:
-                break
-            if not self.enabled:
-                LOGGER.info("TTS muted.")
-                continue
-            if not self._engine:
-                LOGGER.info("Speech: %s", text)
-                continue
-            try:
-                self._stop_event.clear()
-                with self._state_lock:
-                    self._speaking = True
-                self._engine.say(text)
-                self._engine.runAndWait()
-            except Exception as exc:
-                LOGGER.warning("Speech failed: %s", exc)
-            finally:
-                with self._state_lock:
-                    self._speaking = False
-                    self._last_spoken_at = time.time()
-        if com_initialized:
-            try:
-                pythoncom.CoUninitialize()  # type: ignore[name-defined]
-            except Exception:
-                pass
+        self._speech_manager.close()
