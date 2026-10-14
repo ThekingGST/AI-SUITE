@@ -36,6 +36,8 @@ class CameraSystem(CancellableWorker):
         self.vision.stop()
         if self._capture:
             self._capture.release()
+        with self._lock:
+            self._frame = None
 
     def latest_frame(self) -> np.ndarray | None:
         with self._lock:

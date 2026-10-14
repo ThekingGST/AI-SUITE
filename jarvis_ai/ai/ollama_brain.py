@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 
 from ai.context_manager import ContextManager
 from ai.memory import MemoryStore
-from ai.personality import SYSTEM_PROMPT, offline_reply
+from ai.personality import build_system_prompt, offline_reply
 from config import CONFIG
 from utils.logger import LOGGER
 
@@ -53,7 +53,13 @@ class OllamaBrain:
         self.memory.add_message("user", prompt)
         self.context.add("user", prompt)
 
+        # Auto-retry model selection if Ollama was unavailable at startup.
         if not self.model:
+            LOGGER.info("Ollama model not set; attempting auto-retry...")
+            self.model = self._select_model()
+
+        if not self.model:
+            LOGGER.info("Ollama still unavailable; using offline fallback.")
             response = offline_reply(prompt)
             self._store_assistant(response)
             if on_token:
@@ -65,16 +71,65 @@ class OllamaBrain:
             cleaned = self._cleanup(response)
             self._store_assistant(cleaned)
             return cleaned
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-            LOGGER.warning("Ollama chat failed; using fallback: %s", exc)
+        except Exception as exc:
+            LOGGER.warning("Ollama chat failed (%s); using fallback: %s", type(exc).__name__, exc)
             response = offline_reply(prompt)
             self._store_assistant(response)
             if on_token:
                 on_token(response)
             return response
 
+    def ask_grounded(self, prompt: str, search_context: str,
+                     on_token: Callable[[str], None] | None = None) -> str:
+        """Answer a user query using web search results as grounding context.
+
+        Saves both the user message and the response to memory and context
+        through the same pipeline as ``ask()``.
+        """
+        self.memory.add_message("user", prompt)
+        self.context.add("user", prompt)
+
+        if not self.model:
+            self.model = self._select_model()
+        if not self.model:
+            response = offline_reply(prompt)
+            self._store_assistant(response)
+            return response
+
+        grounded_prompt = (
+            build_system_prompt() + "\n\n"
+            "You just performed a web search. Here are the results:\n"
+            f"{search_context}\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Synthesize these results to answer the user's question accurately.\n"
+            "2. Answer NATURALLY and CONVERSATIONALLY in your JARVIS persona.\n"
+            "3. Do NOT say 'Based on the web results' or 'According to the search'. "
+            "Just state the facts as if you already know them.\n"
+            "4. If the results are news, summarize them nicely. "
+            "If they don't contain the answer, say you aren't sure right now.\n"
+            "5. Keep the response concise but informative.\n"
+        )
+
+        messages = [
+            {"role": "system", "content": grounded_prompt},
+            *self.context.messages(),
+        ]
+        payload = {"model": self.model, "messages": messages, "stream": False}
+
+        try:
+            res = self._request_json("/api/chat", payload, timeout=CONFIG.ai.response_timeout_seconds)
+            reply = res.get("message", {}).get("content", "").strip()
+            cleaned = self._cleanup(reply)
+            self._store_assistant(cleaned)
+            return cleaned
+        except Exception as exc:
+            LOGGER.warning("Grounded ask failed (%s): %s", type(exc).__name__, exc)
+            response = offline_reply(prompt)
+            self._store_assistant(response)
+            return response
+
     def _stream_chat(self, prompt: str, on_token: Callable[[str], None] | None) -> Iterator[str]:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *self.context.messages()]
+        messages = [{"role": "system", "content": build_system_prompt()}, *self.context.messages()]
         payload = {"model": self.model, "messages": messages, "stream": True}
         req = urllib.request.Request(
             CONFIG.ai.ollama_url + "/api/chat",

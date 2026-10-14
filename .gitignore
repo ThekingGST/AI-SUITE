@@ -47,3 +47,16 @@ node_modules/
 
 # Mac
 *.DS_Store
+
+# Data runtime and test database files
+*.db
+jarvis_ai/data/
+**/data/captures/
+**/data/faces/
+**/data/intruders/
+**/data/screenshots/
+*.log.*
+
+# Scratch and planning files
+ddg.html
+commit_plan.md

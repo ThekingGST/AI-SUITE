@@ -16,6 +16,10 @@ APP_ALIASES = {
     "terminal": ["wt.exe"],
     "explorer": ["explorer.exe"],
     "task manager": ["taskmgr.exe"],
+    "chrome": ["cmd", "/c", "start", "", "chrome"],
+    "google chrome": ["cmd", "/c", "start", "", "chrome"],
+    "vscode": ["cmd", "/c", "start", "", "code"],
+    "visual studio code": ["cmd", "/c", "start", "", "code"],
 }
 
 

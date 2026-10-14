@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import Any
 
 import cv2
@@ -31,8 +30,8 @@ class ModelManager:
         with self._lock:
             if "face_detector" in self._cache:
                 return self._cache["face_detector"]
-            prototxt = Path(MODELS_DIR / "deploy.prototxt")
-            caffemodel = Path(MODELS_DIR / "res10_300x300_ssd_iter_140000.caffemodel")
+            prototxt = MODELS_DIR / "deploy.prototxt"
+            caffemodel = MODELS_DIR / "res10_300x300_ssd_iter_140000.caffemodel"
             if not prototxt.exists() or not caffemodel.exists():
                 LOGGER.warning("Face detector models missing in %s", MODELS_DIR)
                 self._cache["face_detector"] = None
@@ -51,7 +50,7 @@ class ModelManager:
         with self._lock:
             if "sface" in self._cache:
                 return self._cache["sface"]
-            model = Path(MODELS_DIR / "face_recognition_sface_2021dec.onnx")
+            model = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
             if not model.exists():
                 LOGGER.warning("SFace ONNX model missing: %s", model)
                 self._cache["sface"] = (None, "")
@@ -73,7 +72,7 @@ class ModelManager:
         with self._lock:
             if "yolo" in self._cache:
                 return self._cache["yolo"]
-            model_path = Path(MODELS_DIR / "yolov8n.pt")
+            model_path = MODELS_DIR / "yolov8n.pt"
             if not model_path.exists():
                 LOGGER.warning("YOLO model missing: %s", model_path)
                 self._cache["yolo"] = None
