@@ -1,49 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
 .venv/
 venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.sqlite3
-jarvis_memory.sqlite3
-*.log
-*.egg-info/
+.env/
+env/
 .env
 .env.*
-.DS_Store
+jarvis_ai/.env
+!.env.example
+
+# IDEs
 .vscode/
 .idea/
+
+# Testing & Coverage
+coverage/
+htmlcov/
+.coverage
+*.lcov
+
+# Build
 build/
 dist/
-*.pyc
+installers/*.exe
+installers/*.msi
+*.exe
+*.msi
+
+# Caches & Temporary Artifacts
+cache/
+scratch/
+scratch_test_projects/
+temporary QA/
+test artifacts/
+
+# Runtime Generated Data (Privacy & Data Protection)
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.bak
 *.pkl
-*.pt
-*.onnx
-*.caffemodel
-/models/
-/models/*
-models/
-models/*
-assets/
+*.pkl.bak
+embeddings/
+
+# Audio / Video / Media Dumps
+*.wav
+*.mp3
 *.mp4
 *.mov
 *.avi
-*.wav
-*.mp3
+*.pcm
+audio dumps/
+video dumps/
 
-# Ignore Python virtual environments inside projects
-.env/
+# Logs
+logs/
+*.log
 
-# Ignore captured data directories
-data/captures/
-data/intruders/
-data/screenshots/
+# Workspace Specific Data
+# Ignore everything inside these runtime folders EXCEPT .gitkeep
+jarvis_ai/data/captures/*
+!jarvis_ai/data/captures/.gitkeep
 
-# Node / other
-node_modules/
+jarvis_ai/data/faces/*
+!jarvis_ai/data/faces/.gitkeep
 
-# JetBrains
-.idea/
+jarvis_ai/data/screenshots/*
+!jarvis_ai/data/screenshots/.gitkeep
 
-# Mac
+jarvis_ai/data/intruders/*
+!jarvis_ai/data/intruders/.gitkeep
+
+jarvis_ai/data/voice/*
+!jarvis_ai/data/voice/.gitkeep
+
+jarvis_ai/data/objects/*
+!jarvis_ai/data/objects/.gitkeep
+
+# Ensure we don't track runtime output for other workspaces
+friday_ai/data/*
+!friday_ai/data/.gitkeep
+
+# OS Files
+.DS_Store
 *.DS_Store
+
+# Node
+node_modules/
