@@ -38,21 +38,6 @@ def path_diagnostics() -> dict[str, str]:
     }
 
 
-def path_diagnostics() -> dict[str, str]:
-    return {
-        "project_root": str(PROJECT_ROOT),
-        "base_dir": str(BASE_DIR),
-        "data_dir": str(DATA_DIR),
-        "models_dir": str(MODELS_DIR),
-        "assets_dir": str(ASSETS_DIR),
-        "memory_db": str(MEMORY_DB),
-        "face_embeddings": str(FACE_EMBEDDINGS_DB),
-        "vosk_model": str(MODELS_DIR / "vosk-model"),
-        "yolo_model": str(MODELS_DIR / "yolov8n.pt"),
-        "sface_model": str(MODELS_DIR / "face_recognition_sface_2021dec.onnx"),
-    }
-
-
 @dataclass(frozen=True)
 class VoiceConfig:
     wake_word: str = "jarvis"
@@ -120,7 +105,3 @@ def ensure_directories() -> None:
         OBJECT_DATASET_DIR,
     ):
         path.mkdir(parents=True, exist_ok=True)
-
-def ensure_directories() -> None:
-    pass
-

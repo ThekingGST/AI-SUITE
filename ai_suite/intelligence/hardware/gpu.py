@@ -11,43 +11,47 @@ class GPUInspector(BaseInspector):
 
     def inspect(self) -> InspectionReport:
         try:
-            import pynvml
-            pynvml.nvmlInit()
-            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-            name = pynvml.nvmlDeviceGetName(handle)
-            if isinstance(name, bytes):
-                name = name.decode('utf-8')
-            meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+            from shared.hardware.manager import HardwareManager
+            import time
+            hw = HardwareManager()
+            if not getattr(hw, "_initialized", False):
+                hw.detect_all()
             
-            total_mb = meminfo.total / 1024**2
-            used_mb = meminfo.used / 1024**2
-            vram_percent = (used_mb / total_mb) * 100 if total_mb > 0 else 0
-            gpu_percent = util.gpu
+            if not hw.gpu.available:
+                return InspectionReport(
+                    inspector=self.name,
+                    status=HealthStatus.UNKNOWN,
+                    timestamp=time.time(),
+                    summary="GPU inspection unavailable or no NVIDIA GPU found.",
+                )
+
+            # Query fresh VRAM usage
+            vram = hw.get_vram_usage()
+            vram_percent = vram.get("percent", 0.0)
             
             status = HealthStatus.HEALTHY
-            if temp > 85 or vram_percent > 95:
+            if hw.gpu.temperature_c > 85 or vram_percent > 95:
                 status = HealthStatus.CRITICAL
-            elif temp > 80 or vram_percent > 90:
+            elif hw.gpu.temperature_c > 80 or vram_percent > 90:
                 status = HealthStatus.WARNING
 
             return InspectionReport(
                 inspector=self.name,
                 status=status,
                 timestamp=time.time(),
-                summary=f"GPU usage at {gpu_percent}%, VRAM {vram_percent:.1f}%, Temp {temp}C",
+                summary=f"GPU usage at {hw.gpu.utilization_percent:.1f}%, VRAM {vram_percent:.1f}%, Temp {hw.gpu.temperature_c}C",
                 details={
-                    "name": name,
-                    "driver_version": pynvml.nvmlSystemGetDriverVersion(),
+                    "name": hw.gpu.name,
+                    "driver_version": hw.gpu.driver_version,
                 },
                 metrics={
-                    "usage_percent": float(gpu_percent),
+                    "usage_percent": float(hw.gpu.utilization_percent),
                     "vram_percent": float(vram_percent),
-                    "temperature_c": float(temp)
+                    "temperature_c": float(hw.gpu.temperature_c)
                 }
             )
         except Exception:
+            import time
             # Fallback
             return InspectionReport(
                 inspector=self.name,
