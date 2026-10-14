@@ -1,284 +1,281 @@
-# JARVIS AI Desktop Assistant
+<div align="center">
+  <img src="assets/logo/ai-suite-logo.png" alt="AI Suite Logo" width="250">
 
-JARVIS is a local-first Windows desktop assistant built with Python and PyQt5. It combines a cinematic hologram interface, offline voice recognition, text-to-speech, local Ollama chat, webcam vision, face recognition, object detection, emotion detection, gesture controls, persistent memory, file search, and system automation.
+  <h1>AI Suite</h1>
+  
+  <p><strong>The Autonomous AI Command Center</strong></p>
 
-The app is designed to run without API keys. Model-powered systems use local files and degrade safely when a model is not installed yet.
+  <p>
+    <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.11-blue.svg" alt="Python 3.11"></a>
+    <a href="https://github.com/your-org/jarvis/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"></a>
+    <a href="https://github.com/your-org/jarvis"><img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey.svg" alt="Platform"></a>
+    <a href="https://ollama.com"><img src="https://img.shields.io/badge/Powered_by-Ollama-white.svg" alt="Powered by Ollama"></a>
+    <a href="https://github.com/your-org/jarvis/stargazers"><img src="https://img.shields.io/github/stars/your-org/jarvis?style=social" alt="Stars"></a>
+  </p>
+</div>
 
-## Quick Start on Windows 10/11
+<br>
 
-1. Install Python 3.11.
-2. During installation, enable **Add python.exe to PATH**.
-3. Open PowerShell in this folder.
-4. Create a virtual environment:
+AI Suite is a next-generation local AI platform that seamlessly unifies JARVIS, FRIDAY IDE, and EDITH into a single intelligent desktop ecosystem for productivity, software development, automation, and AI-assisted workflows.
 
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip wheel setuptools
-pip install -r .\jarvis_ai\requirements.txt
-```
+<br>
 
-5. Run the assistant:
+**🧠 JARVIS • 💻 FRIDAY IDE • 🤖 EDITH**
 
-```powershell
-python .\jarvis_ai\main.py
-```
+**Privacy First • Local AI • GPU Accelerated • Modular Architecture**
 
-If PowerShell blocks activation, run:
+<br>
 
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
+<h2 align="center">Boot Experience</h2>
 
-## Optional Ollama Brain
+<p align="center">
+  <img src="assets/screenshots/boot-screen.png" width="900" alt="Cinematic Boot Sequence">
+</p>
 
-1. Install Ollama from `https://ollama.com`.
-2. Restart PowerShell.
-3. Pull one local model:
+<br>
 
-```powershell
-ollama pull llama3
-```
+<h2 align="center">Workspaces</h2>
 
-JARVIS automatically checks `llama3`, `mistral`, then `phi`. If Ollama is not running, it uses its offline command brain and deterministic fallback responses.
+<p align="center">
+  <img src="assets/screenshots/jarvis.png" width="31%" alt="JARVIS Workspace">
+  <img src="assets/screenshots/friday.png" width="31%" alt="FRIDAY IDE">
+  <img src="assets/screenshots/edith.png" width="31%" alt="EDITH Dashboard">
+</p>
 
-## Model Download Guide
+<br>
 
-Place these files in `jarvis_ai/models/`:
+## Features
 
-| Feature | Required file/folder | Source |
-| --- | --- | --- |
-| Vosk speech recognition | `vosk-model/` | Download a small English Vosk model from `https://alphacephei.com/vosk/models` and extract it as this folder. |
-| Face detection | `deploy.prototxt` and `res10_300x300_ssd_iter_140000.caffemodel` | OpenCV SSD face detector model. |
-| Face recognition | `face_recognition_sface_2021dec.onnx` | OpenCV Zoo SFace ONNX model. |
-| Object detection | `yolov8n.pt` | Download with Ultralytics or from the official YOLOv8 release assets. |
+### 🧠 JARVIS
+- **Voice Assistant**: Ultra-low latency voice recognition paired with Edge-TTS for fluid conversational interactions.
+- **Vision**: Deep integration with desktop events, capable of 'seeing' your screen using Computer Vision.
+- **Object Detection**: Identifies objects and elements on-screen in real time.
+- **Face Recognition**: Securely registers and recognizes authorized users.
+- **Local LLM**: Fully powered by local Ollama models (e.g., Llama 3) ensuring zero telemetry.
+- **Memory**: Contextual persistence across sessions and tasks.
+- **System Automation**: Execute cross-platform terminal commands and Python macros dynamically.
 
-The app still launches if these are missing. The affected feature logs a clear warning and stays disabled instead of crashing.
+### 💻 FRIDAY IDE
+- **AI Code Assistant**: A full-fledged agentic coding assistant within your development environment.
+- **Multi-file Workspace**: Work across your entire project rather than just a single file.
+- **Intelligent Editing**: AI-driven refactoring and code generation.
+- **Interactive Diff**: Review and apply changes natively before execution.
+- **AI Actions**: Orchestrate autonomous coding, debugging, and continuous integration loops seamlessly.
+- **Terminal Integration**: Full terminal environment linked directly to your active workspace.
 
-### Vosk Setup
+### 🤖 EDITH
+- **AI Visualization**: Real-time holographic rendering of internal AI states.
+- **Holographic Dashboard**: A cinematic interface for monitoring system health and events.
+- **Future Autonomous AI Framework**: Advanced security, packet monitoring, and threat analysis suite (Coming Soon).
 
-1. Open `https://alphacephei.com/vosk/models`.
-2. Download a small English model, for example `vosk-model-small-en-us`.
-3. Extract the ZIP.
-4. Rename the extracted folder to `vosk-model`.
-5. Place it at `jarvis_ai/models/vosk-model/`.
+### ⚙ AI Suite
+- **Unified Workspace Switching**: Hot-swappable AI personalities tailored for specific cognitive tasks.
+- **Modular Architecture**: Decouples the UI from the underlying intelligence framework.
+- **Local-first Design**: Absolute privacy. Your code, screen, voice, and data never leave your machine.
+- **GPU Acceleration**: Native PyTorch and ONNX support for massive performance improvements during local inference.
+- **Shared Services**: Reusable registries and capabilities injected dynamically.
+- **Event Bus**: Powerful inter-process and inter-widget event handling.
+- **Workspace Manager**: Safely suspends and resumes environments instantly.
 
-### YOLO Setup
-
-Install dependencies first, then download YOLOv8n with:
-
-```powershell
-python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-move .\yolov8n.pt .\jarvis_ai\models\yolov8n.pt
-```
-
-### SFace Setup
-
-Download `face_recognition_sface_2021dec.onnx` from the OpenCV Zoo SFace model page and place it in `jarvis_ai/models/`.
-
-### OpenCV Face Detector Setup
-
-Download:
-
-- `deploy.prototxt`
-- `res10_300x300_ssd_iter_140000.caffemodel`
-
-Place both in `jarvis_ai/models/`.
-
-## Voice Commands
-
-Wake word: `Jarvis`
-
-Examples:
-
-- `Jarvis open notepad`
-- `Jarvis open my DBMS notes`
-- `Jarvis what do you see`
-- `Jarvis remember my favorite game is Valorant`
-- `Jarvis what is my favorite game`
-- `Jarvis take screenshot`
-- `Jarvis system status`
-- `Jarvis tell me a joke`
-- `Jarvis play lo-fi music`
-
-You can also type commands directly into the AI console, which is useful before the Vosk model or microphone is configured.
-
-## Face Registration
-
-The project includes the SFace registration pipeline. A future UI button can call it directly. For now, registration is available through code:
-
-```python
-frame = camera.latest_frame()
-faces = camera.vision.face_detector.detect(frame)
-if faces:
-    camera.vision.face_recognizer.register_owner(frame, faces[0])
-```
-
-After registration, embeddings are saved to `jarvis_ai/data/owner_embeddings.json`. Unknown faces are captured in `jarvis_ai/data/intruders/`.
+---
 
 ## Architecture
 
+AI Suite relies on a powerful Event Bus to decouple the UI from the underlying intelligence framework.
+
 ```text
-jarvis_ai/
-  main.py                  Application entry point
-  config.py                Central paths and runtime settings
-  voice/                   Vosk listener, wake word, TTS, routing
-  ai/                      Ollama brain, memory, personality, context
-  vision/                  Camera, faces, SFace, YOLO, DeepFace, MediaPipe
-  automation/              Apps, files, system control, utilities
-  ui/                      PyQt5 hologram interface and widgets
-  core/                    Worker primitives and singleton model manager
-  plugins/                 Dynamic command plugin registration
-  utils/                   Logging, constants, helper functions
+AI Suite
+├── JARVIS
+├── FRIDAY IDE
+├── EDITH
+├── Shared Services
+├── Event Bus
+├── Workspace Manager
+├── Session Manager
+└── Intelligence Layer
 ```
 
-## System Design
+---
 
-- PyQt5 main thread only renders UI and handles signals.
-- Camera capture runs in `CameraSystem`, a dedicated cancellable worker.
-- Face recognition, object detection, emotion detection, and gesture processing run in `VisionWorker`.
-- Camera frames use a latest-only queue so slow inference never builds a memory backlog.
-- Speech synthesis uses a queue-based `Speaker`.
-- Voice recognition runs in `VoiceListener`.
-- Commands are processed on a background command loop, not in the UI thread.
-- Models are cached in `ModelManager` to avoid duplicate loading.
-- Shutdown stops listener, camera, vision worker, and speaker cleanly.
-- The command router uses hard commands and plugin commands before LLM fallback.
+## Installation
 
-## Performance Notes
+Installing AI Suite is designed to be straightforward. Follow these steps to get your local AI environment running.
 
-- Camera capture runs on its own thread.
-- Heavy vision inference runs on a separate worker thread.
-- Speech synthesis uses a queue and a dedicated worker thread.
-- Voice recognition runs continuously in the background.
-- UI updates use Qt timers and never block on AI inference.
-- File indexing runs in a background thread and refreshes periodically.
-- Vision models are loaded once and reused.
-- Emotion detection is throttled because DeepFace is heavier than object and face detection.
-- Gesture actions use cooldowns to prevent repeated triggers.
+### Prerequisites
 
-## Error Handling
+- **Python 3.11**: You **MUST** install Python 3.11. (Newer versions like 3.12+ may encounter compatibility issues with PyAudio).
+- **Git**: Required to clone the repository.
+- **Ollama**: Required for running local LLMs. Download from [ollama.com](https://ollama.com).
+- **CUDA (Optional)**: If you have an NVIDIA GPU, install the appropriate CUDA toolkit for massive performance improvements.
 
-JARVIS handles:
+### 1. Clone the Repository
 
-- Missing webcam
-- Missing microphone or PyAudio device errors
-- Missing Vosk, YOLO, SFace, face detector, or DeepFace dependencies
-- Ollama not installed or not running
-- Internet failures for web commands
-- File permission errors while indexing or cleaning temp files
-- Camera release during shutdown
-
-Failures are written to `jarvis_ai/data/jarvis.log`.
-
-## Troubleshooting
-
-### `python` is not recognized
-
-Reinstall Python 3.11 and enable **Add python.exe to PATH**. Then open a new PowerShell window.
-
-### PyAudio installation fails
-
-Install pip tooling first:
-
-```powershell
-python -m pip install --upgrade pip wheel setuptools
-pip install PyAudio
+```bash
+git clone https://github.com/your-org/jarvis.git
+cd jarvis
 ```
 
-If it still fails, install the Microsoft C++ Build Tools or use a Python 3.11 PyAudio wheel.
+### 2. Create a Virtual Environment
 
-### Microphone does not work
+<details>
+<summary><b>Windows</b></summary>
 
-- Check Windows privacy settings for microphone access.
-- Confirm your default input device works in Windows Sound Settings.
-- Make sure `jarvis_ai/models/vosk-model/` exists.
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+```
+</details>
 
-### Camera is black or unavailable
+<details>
+<summary><b>Linux / macOS</b></summary>
 
-- Close other apps using the webcam.
-- Check Windows camera privacy settings.
-- Change `camera_index` in `config.py` from `0` to `1`.
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+```
+</details>
 
-### Ollama responses do not work
+### 3. Install Dependencies
 
-Run:
-
-```powershell
-ollama list
-ollama pull llama3
+```bash
+pip install -r requirements.txt
 ```
 
-Then restart JARVIS.
+### 4. Configuration
 
-### App feels slow
+<details>
+<summary><b>Windows</b></summary>
 
-- Keep object detection disabled until needed.
-- Use `yolov8n.pt`, not a larger YOLO model.
-- Close GPU-heavy games while demonstrating.
-- Use a smaller Vosk model.
-- Disable DeepFace emotion detection in `CameraSystem` if your CPU is low-end.
+```cmd
+copy .env.example .env
+```
+</details>
 
-## Face Recognition
+<details>
+<summary><b>Linux / macOS</b></summary>
 
-Face detection uses OpenCV DNN SSD. Face recognition uses ONNX Runtime for the SFace embedding pipeline and cosine similarity for owner matching. Owner embeddings are stored in `jarvis_ai/data/owner_embeddings.json`.
+```bash
+cp .env.example .env
+```
+</details>
 
-To register an owner face from code or a future UI button, call:
-
-```python
-camera.face_recognizer.register_owner(frame, face_box)
+*(Optional) OpenRouter Setup:*
+If you wish to use cloud models specifically within the FRIDAY workspace, open `.env` and add your API key:
+```ini
+OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-Unknown faces are saved to `jarvis_ai/data/intruders/` when owner embeddings exist.
+### 5. Start Ollama
 
-## Gesture Controls
+Ensure Ollama is running in the background. Open a separate terminal and pull your preferred local model (we recommend `llama3` for general use):
 
-MediaPipe Hands maps simple gestures to desktop actions:
-
-- Open hand: play/pause
-- Closed fist: screenshot
-- Two fingers: volume up
-- Index finger: volume down
-
-Cooldown protection prevents repeated accidental triggers.
-
-## Plugin System
-
-Plugins register commands dynamically through `PluginRegistry`. A plugin should expose a `register(registry)` function and add one or more `PluginCommand` objects.
-
-Example:
-
-```python
-from plugins.registry import PluginCommand
-
-def register(registry):
-    registry.register(
-        PluginCommand(
-            name="smart_light",
-            patterns=("turn on lights", "lights on"),
-            handler=lambda text: "Smart lights activated.",
-            priority=25,
-        )
-    )
+```bash
+ollama run llama3
 ```
 
-Command priority is lower-first. Built-in system commands use high priority, while AI fallback happens last. This design allows future modules such as smart home, OCR, Discord, IoT, custom voice packs, sensors, and automation workflows without rewriting the core router.
+### 6. Launch AI Suite
 
-## Beginner Workflow
+You are ready to launch the application:
 
-1. Install Python 3.11.
-2. Create and activate `.venv`.
-3. Install `requirements.txt`.
-4. Launch once without models to confirm the UI opens.
-5. Add Vosk for wake-word voice commands.
-6. Add Ollama and `llama3` for local chat.
-7. Add YOLO for object detection.
-8. Add face detector and SFace for identity recognition.
-9. Test typed commands first.
-10. Test voice commands with `Jarvis open notepad`.
-11. Enable object detection from the UI only when demonstrating.
-12. Review `jarvis_ai/data/jarvis.log` when something does not work.
+```bash
+python ai_suite/main.py
+```
+*(Alternatively, use `python launcher.py` to start a specific workspace from the command line).*
 
-## Notes for Demonstrations
+---
 
-For the most impressive demo, install the Vosk model, YOLOv8n, OpenCV face detector, SFace ONNX, and run Ollama with `llama3`. The app remains functional without them, but the cinematic vision and voice systems become much stronger once the local assets are present.
+## First Startup Guide
+
+When you launch AI Suite for the first time, you will experience the **Cinematic Boot Sequence**.
+
+1. **Boot Overlay**: A full-screen glowing arc reactor interface will appear.
+2. **Loading Process**: Background threads (the `BootWorker`) will safely initialize the Event Bus, Database, and Workspace Managers without freezing the UI.
+3. **Workspace Loading**: The default workspace (JARVIS or FRIDAY) will be injected into the layout.
+4. **First Interaction**: The boot screen will smoothly dissolve, revealing your dashboard. You can now use the text input field or voice controls (if enabled) to speak to your AI.
+
+---
+
+## Configuration
+
+AI Suite offers extensive configuration to tailor the experience to your hardware. Most settings can be tweaked inside `.env` or via the `ai_suite/core/config/` directory.
+
+- **TTS Configuration**: Adjust Edge-TTS voices and speech rate.
+- **Model Selection**: Switch between local Ollama models and cloud OpenRouter models.
+- **Hardware Acceleration**: Enable/disable PyTorch CUDA offloading.
+
+---
+
+## Project Structure
+
+```text
+jarvis/
+├── ai_suite/                # Core Application Framework
+│   ├── core/                # Event Bus, DI Container, Registry
+│   ├── intelligence/        # Hardware integrations (GPU, Audio)
+│   ├── managers/            # Session, Assistant, and Workspace Managers
+│   ├── models/              # Provider Factories (Ollama, OpenRouter)
+│   └── ui/                  # Qt User Interface (Boot System, Dashboard)
+├── jarvis_ai/               # Personal Assistant Workspace
+├── friday_ai/               # Developer IDE Workspace
+├── docs/                    # Architecture and API Documentation
+└── assets/                  # Icons, Stylesheets, and Media
+```
+
+---
+
+## Roadmap
+
+Our vision for AI Suite v1.1 and beyond:
+- Complete Voice Mode 2.0 with Real-Time interruption.
+- Launch the EDITH Security Workspace.
+- Deep Visual context via multimodal local LLMs.
+- Autonomous file-system manipulation agents.
+
+---
+
+## Known Issues
+
+- **High Memory Usage**: Loading 7B+ parameter models locally requires at least 8GB of RAM/VRAM.
+- **Audio Capture**: Certain Windows environments may require manually granting microphone permissions.
+
+---
+
+## Privacy
+
+AI Suite is designed to be **Zero-Trust**. 
+- The repository enforces strict `.gitignore` rules to ensure your local `data/` directories, SQLite databases, screenshots, and logs are never tracked.
+- Runtime data never leaves your machine unless you explicitly configure an external API provider like OpenRouter.
+
+---
+
+## Security
+
+If you discover a vulnerability, please do NOT open a public issue. Refer to [SECURITY.md](docs/SECURITY.md) for our coordinated disclosure guidelines.
+
+---
+
+## Contributing
+
+We welcome contributions from the community! Whether it's a new Workspace, a UI enhancement, or a bug fix.
+
+Please review our [Contributing Guidelines](docs/CONTRIBUTING.md) and our [Code of Conduct](docs/CODE_OF_CONDUCT.md) before submitting a Pull Request.
+
+---
+
+## License
+
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.
+
+---
+
+## Acknowledgements
+
+- Built on top of [Ollama](https://ollama.com/) for local inference.
+- UI powered by [PyQt5](https://riverbankcomputing.com/software/pyqt/).
+- Speech recognition via [Vosk](https://alphacephei.com/vosk/).
+
+---
+
+<div align="center">
+  <strong>If you found this project helpful, please consider leaving a ⭐ on the repository!</strong>
+</div>
