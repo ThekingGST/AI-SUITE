@@ -1,0 +1,93 @@
+{
+  "timestamp": "2026-08-28 22:19:10",
+  "phase": "PRE-OPTIMIZATION (V1 baseline)",
+  "system": {
+    "process_rss_mb": 20.37,
+    "system_ram_total_gb": 15.65,
+    "system_ram_available_gb": 4.64,
+    "system_ram_used_percent": 70.4,
+    "cpu_percent": 6.3
+  },
+  "gpu": {
+    "gpu_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "vram_total_mb": 6141.0,
+    "vram_used_mb": 521.86,
+    "vram_free_mb": 5619.14,
+    "gpu_utilization_percent": 0,
+    "gpu_temperature_c": 41,
+    "driver_version": "592.82"
+  },
+  "pytorch": {
+    "pytorch_cuda_available": true,
+    "pytorch_cuda_device_count": 1,
+    "pytorch_cuda_device_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "pytorch_cuda_version": "12.8",
+    "pytorch_version": "2.11.0+cu128"
+  },
+  "onnx": {
+    "onnx_providers": [
+      "TensorrtExecutionProvider",
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "onnx_version": "1.19.2"
+  },
+  "yolo": {
+    "yolo_load_time_s": 0.127,
+    "yolo_device": "cuda:0",
+    "yolo_inference_time_ms": 6.9,
+    "yolo_loaded": true
+  },
+  "system_after_models": {
+    "process_rss_mb": 1185.89,
+    "system_ram_total_gb": 15.65,
+    "system_ram_available_gb": 3.44,
+    "system_ram_used_percent": 78.0,
+    "cpu_percent": 14.2
+  },
+  "gpu_after_models": {
+    "gpu_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "vram_total_mb": 6141.0,
+    "vram_used_mb": 690.45,
+    "vram_free_mb": 5450.55,
+    "gpu_utilization_percent": 0,
+    "gpu_temperature_c": 44,
+    "driver_version": "592.82"
+  },
+  "sface": {
+    "sface_load_time_s": 0.168,
+    "sface_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "sface_inference_time_ms": 2.29,
+    "sface_loaded": true
+  },
+  "ollama": {
+    "ollama_running": true,
+    "ollama_models": [
+      "qwen3:latest",
+      "llama3:latest"
+    ],
+    "ollama_gpu_layers": "no models loaded"
+  },
+  "system_final": {
+    "process_rss_mb": 1398.67,
+    "system_ram_total_gb": 15.65,
+    "system_ram_available_gb": 3.27,
+    "system_ram_used_percent": 79.1,
+    "cpu_percent": 4.7
+  },
+  "gpu_final": {
+    "gpu_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "vram_total_mb": 6141.0,
+    "vram_used_mb": 694.45,
+    "vram_free_mb": 5446.55,
+    "gpu_utilization_percent": 0,
+    "gpu_temperature_c": 42,
+    "driver_version": "592.82"
+  }
+}
