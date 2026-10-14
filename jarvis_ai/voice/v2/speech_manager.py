@@ -133,6 +133,7 @@ class SpeechManager:
             self.state_machine.transition(VoiceState.STREAMING)
             
         job = self._queue.put(cleaned, priority, self._abort.event)
+        LOGGER.info("[TTS] enqueue: text_length=%d queue_size=%d job_id=%s", len(text), self._queue.depth, job.job_id)
         import time
         import threading
 
@@ -213,7 +214,16 @@ class SpeechManager:
                 LOGGER.info("SpeechManager: muted, skipping job %s", job.job_id)
                 continue
 
-            self._speak_job(job)
+            try:
+                self._speak_job(job)
+            except Exception as exc:
+                LOGGER.exception("SpeechManager worker caught exception during _speak_job: %s", exc)
+                # Recover state if it crashed mid-speech
+                with self._state_lock:
+                    self._speaking = False
+                    self._current_job = None
+                self.state_machine.transition(VoiceState.IDLE)
+                self._event_bus.emit(VoiceEvent.SPEECH_FINISHED, {"job_id": job.job_id})
 
     def _speak_job(self, job: SpeechJob) -> None:
         """Execute a single speech job with failover."""
@@ -234,7 +244,19 @@ class SpeechManager:
             time.sleep(0.15)  # Brief settling delay for mic sync
             
             with self._state_lock:
-                profile = self._profile
+                base_profile = self._profile
+                
+            try:
+                from shared.language.detector import get_detector
+                from shared.language.tts_router import TTSRouter
+                
+                detector = get_detector()
+                router = TTSRouter()
+                router.detector = detector
+                profile = router.resolve_profile(job.text, base_profile)
+            except Exception as exc:
+                LOGGER.error("[TTS] TTSRouter failed to resolve profile: %s", exc)
+                profile = base_profile
                 
             # Dynamic Backend Resolution
             resolved = False
@@ -253,13 +275,14 @@ class SpeechManager:
                     
                 try:
                     # Inform event bus of the selected backend
+                    LOGGER.info("[TTS] Backend: %s", backend_name)
                     self._event_bus.emit(VoiceEvent.BACKEND_CHANGED, {"backend": backend_name})
                     if hasattr(backend, "apply_profile"):
                         backend.apply_profile(profile)
                         
                     import threading
 
-                        
+                    LOGGER.info("[TTS] Speaking")
                     backend.speak(job.text, self._abort.event)
                     resolved = True
                     break
@@ -271,7 +294,7 @@ class SpeechManager:
                     LOGGER.warning("SpeechManager: backend '%s' failed: %s", backend_name, exc)
                     
             if not resolved:
-                LOGGER.error("SpeechManager: ALL backends in profile '%s' failed, dropped: %s", 
+                LOGGER.error("[TTS] Failed: ALL backends in profile '%s' failed, dropped: %s", 
                              profile.name, job.text[:80])
 
         finally:

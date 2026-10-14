@@ -79,6 +79,12 @@ class Speaker:
         # Register Edge-TTS
         self.registry.register(CONFIG.voice.default_tts_backend, EdgeTtsBackend())
         
+        # Register Kokoro and Piper (Multilingual / Offline)
+        from jarvis_ai.voice.v2.backends.kokoro_backend import KokoroBackend
+        self.registry.register("kokoro", KokoroBackend())
+        from jarvis_ai.voice.v2.backends.piper_backend import PiperBackend
+        self.registry.register("piper", PiperBackend())
+        
         # Register Pyttsx3 (Offline Fallback)
         from jarvis_ai.voice.v2.backends.pyttsx3_backend import Pyttsx3Backend
         self.registry.register("pyttsx3", Pyttsx3Backend())
