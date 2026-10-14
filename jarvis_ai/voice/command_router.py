@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -121,24 +122,55 @@ class CommandRouter:
             )
         )
 
-    def handle(self, raw_text: str, speak: bool = True) -> str:
+    def handle(self, raw_text: str, speak: bool = True, language: str | None = None) -> str:
         import time
         import threading
         t_start = time.perf_counter()
-        LOGGER.info("Routing command: '%s'", raw_text)
+        
+        # Determine language per-query dynamically
+        from shared.language.detector import get_detector
+        from shared.language.types import Language
+        
+        detector = get_detector()
+        res = detector.detect_text(raw_text)
+        detected_lang = res.language.name_en if res and res.language.code != "unk" else None
+        
+        provided_lang = None
+        if language:
+            if len(language) <= 3:
+                lang_obj = Language.from_code(language)
+                provided_lang = lang_obj.name_en if lang_obj.code != "unk" else "English"
+            else:
+                provided_lang = language
+                
+        # Priority: Actual detected text language > Provided language (from UI/STT) > English
+        if detected_lang:
+            language = detected_lang
+        elif provided_lang:
+            language = provided_lang
+        else:
+            language = "English"
+            
+        LOGGER.info("[ROUTER] Command received: %s", raw_text)
         LOGGER.info("[DOC] query received")
+        LOGGER.info("[ROUTER] Language: %s (Provided: %s, Detected: %s)", language, provided_lang, detected_lang)
         
         text = self._normalize_command(raw_text)
         
         if text in ("stop", "cancel", "never mind"):
             speech_manager = getattr(self.speaker, "manager", None)
             if speech_manager:
-                speech_manager.interrupt()
-            return ""
+                self.speaker.interrupt()
+            return "Cancelled."
+        else:
+            # Reset abort state for new command
+            speech_manager = getattr(self.speaker, "manager", None)
+            if speech_manager and hasattr(speech_manager, "_abort"):
+                speech_manager._abort.reset()
 
         t0 = time.perf_counter()
         try:
-            result = self._route(text)
+            result = self._route(text, language=language)
         except Exception as exc:
             LOGGER.exception("Command failed")
             result = f"I encountered an error, but I recovered: {exc}"
@@ -165,68 +197,84 @@ class CommandRouter:
 
             buffer = SentenceBuffer(on_sentence=enqueue_chunk)
             
+            LOGGER.info("[LLM] Request started")
             full_response_parts = []
-            for token in result:
-                if speech_manager and speech_manager.is_aborted:
-                    LOGGER.info("CommandRouter: LLM generation aborted.")
-                    break
-                full_response_parts.append(token)
-                if not is_generation_task:
-                    buffer.feed(token)
-                
-            if not (speech_manager and speech_manager.is_aborted) and not is_generation_task:
-                buffer.flush()
-            else:
-                buffer.clear()
-                
-            full_response = "".join(full_response_parts)
             
-            if full_response.strip() == "":
-                LOGGER.warning("[LLM] Empty response received. Applying safe fallback response.")
-                fallback = "Sorry, I wasn't able to generate a response this time. Please try again."
+            try:
+                for i, token in enumerate(result):
+                    if i == 0:
+                        LOGGER.info("[LLM] First token")
+                    if speech_manager and speech_manager.is_aborted:
+                        LOGGER.info("CommandRouter: LLM generation aborted.")
+                        break
+                    full_response_parts.append(token)
+                    if not is_generation_task:
+                        buffer.feed(token)
+            except Exception as exc:
+                LOGGER.exception("Command router stream error")
+                if not full_response_parts:
+                    err_msg = f"I encountered a stream error: {exc}"
+                    full_response_parts.append(err_msg)
+                    if not is_generation_task:
+                        buffer.feed(err_msg)
+            finally:
+                if not (speech_manager and speech_manager.is_aborted) and not is_generation_task:
+                    buffer.flush()
+                else:
+                    buffer.clear()
+                    
+                full_response = "".join(full_response_parts).strip()
                 
-                # Check for failed documents if applicable
-                if hasattr(self, "brain") and hasattr(self.brain, "retriever") and self.brain.retriever:
-                    store = self.brain.retriever.store
-                    if store and store.documents:
-                        for doc in store.documents.values():
-                            if getattr(doc, 'failed', False):
-                                fallback = f"Sorry, Captain. I couldn't extract readable content from {doc.filename}. It may be scanned, protected, corrupted, or contain content this parser can't read yet."
-                                break
+                # If response was empty and we were NOT intentionally aborted, use fallback
+                if not full_response and not (speech_manager and speech_manager.is_aborted):
+                    LOGGER.warning("[ROUTER] LLM returned empty response.")
+                    fallback = "Sorry, I wasn't able to generate a response this time."
+                    
+                    # Check for failed documents if applicable
+                    if hasattr(self, "brain") and hasattr(self.brain, "retriever") and self.brain.retriever:
+                        store = self.brain.retriever.store
+                        if store and store.documents:
+                            for doc in store.documents.values():
+                                if getattr(doc, 'failed', False):
+                                    fallback = f"Sorry, Captain. I couldn't extract readable content from {doc.filename}. It may be scanned, protected, corrupted, or contain content this parser can't read yet."
+                                    break
+                                    
+                    full_response = fallback
+                    # Feed the fallback to TTS if we were streaming
+                    if speech_manager and speak:
+                        speech_manager.enqueue(full_response, SpeechPriority.NORMAL)
+                        buffer.flush() # Ensure it gets processed
+
+                # Handle File Generation
+                if "[GENERATE_FILE:" in full_response:
+                    match = re.search(r"\[GENERATE_FILE:\s*(.+?)\](.*)", full_response, re.DOTALL)
+                    if match:
+                        filename = match.group(1).strip()
+                        file_content = match.group(2).strip()
+                        ext = ""
+                        if "." in filename:
+                            parts = filename.rsplit(".", 1)
+                            ext = "." + parts[1]
+                            filename = parts[0]
+                            
+                        try:
+                            out_path = self.generator_manager.generate_file(file_content, filename, ext)
+                            success_msg = f"I have generated the file: {out_path.name}."
+                            full_response = success_msg
+                            if speech_manager and speak:
+                                speech_manager.enqueue(success_msg, SpeechPriority.NORMAL)
+                        except Exception as e:
+                            LOGGER.exception("Failed to generate file")
+                            full_response = f"I tried to generate the file, but encountered an error: {e}"
+                            if speech_manager and speak:
+                                speech_manager.enqueue(full_response, SpeechPriority.NORMAL)
                                 
-                full_response = fallback
-                if speech_manager and speak:
-                    speech_manager.enqueue(full_response, SpeechPriority.NORMAL)
-            
-            # Handle File Generation
-            if "[GENERATE_FILE:" in full_response:
-                match = re.search(r"\[GENERATE_FILE:\s*(.+?)\](.*)", full_response, re.DOTALL)
-                if match:
-                    filename = match.group(1).strip()
-                    file_content = match.group(2).strip()
-                    ext = ""
-                    if "." in filename:
-                        parts = filename.rsplit(".", 1)
-                        ext = "." + parts[1]
-                        filename = parts[0]
-                        
-                    try:
-                        out_path = self.generator_manager.generate_file(file_content, filename, ext)
-                        success_msg = f"I have generated the file: {out_path.name}."
-                        full_response = success_msg
-                        if speech_manager and speak:
-                            speech_manager.enqueue(success_msg, SpeechPriority.NORMAL)
-                    except Exception as e:
-                        LOGGER.exception("Failed to generate file")
-                        full_response = f"I tried to generate the file, but encountered an error: {e}"
-                        if speech_manager and speak:
-                            speech_manager.enqueue(full_response, SpeechPriority.NORMAL)
-            
-            if speech_manager and speak and not is_generation_task:
-                speech_manager.set_streaming_session(False)
-            
-            if self.on_response:
-                self.on_response(full_response)
+                if speech_manager and speak and not is_generation_task:
+                    speech_manager.set_streaming_session(False)
+                
+                # Wait for file processing if needed
+                if self.on_response:
+                    self.on_response(full_response)
                 
             return full_response
         else:
@@ -237,7 +285,7 @@ class CommandRouter:
                 self.speaker.speak(result)
             return result
 
-    def _route(self, text: str) -> str | Iterator[str]:
+    def _route(self, text: str, language: str | None = None) -> str | Iterator[str]:
         if self._awaiting_rps_choice:
             self._awaiting_rps_choice = False
             return self.utilities.rock_paper_scissors(text)
@@ -246,8 +294,8 @@ class CommandRouter:
         if " and " in text and any(text.startswith(v) for v in automation_verbs):
             parts = text.split(" and ", 1)
             if any(parts[1].startswith(v) for v in automation_verbs):
-                res1 = self._route(parts[0])
-                res2 = self._route(parts[1])
+                res1 = self._route(parts[0], language=language)
+                res2 = self._route(parts[1], language=language)
                 s1 = res1 if isinstance(res1, str) else "".join(list(res1))
                 s2 = res2 if isinstance(res2, str) else "".join(list(res2))
                 return f"{s1} {s2}".strip()
@@ -391,19 +439,19 @@ class CommandRouter:
         # 4. System Intelligence
         if any(kw in lowered_text for kw in ("battery", "system status", "cpu", "gpu", "disk", "ram", "laptop")):
             LOGGER.info("Intent: Intelligence | Confidence: 1.00")
-            return self._intelligence_status()
+            return self._intelligence_status(language=language)
 
         # 5. Web Search
         search_plan = self._plan_search(text)
         if search_plan and search_plan.get("needs_search"):
             LOGGER.info("Intent: Web Search | Confidence: 0.98")
             query = search_plan.get("search_query") or text
-            return self._handle_search(text, query)
+            return self._handle_search(text, query, language=language)
 
         # 6. General Conversation
         LOGGER.info("Intent: General Conversation | Confidence: 0.85")
         LOGGER.info("[ROUTER] route = local_ai")
-        return self.brain.ask_stream(text)
+        return self.brain.ask_stream(text, language=language)
 
     def _plan_search(self, text: str) -> dict | None:
         """Ask the LLM whether a web search is needed, with conversation context."""
@@ -456,21 +504,21 @@ class CommandRouter:
             LOGGER.error("Search planning failed: %s", e)
             return None
 
-    def _handle_search(self, text: str, search_query: str) -> str | Iterator[str]:
+    def _handle_search(self, text: str, search_query: str, language: str | None = None) -> str | Iterator[str]:
         """Perform a web search and pass results through the brain's grounded pipeline."""
         results = self.web_search.search(search_query)
         if not results:
             LOGGER.info("[ROUTER] route = local_ai")
-        return self.brain.ask_stream(text)
+            return self.brain.ask_stream(text, language=language)
 
         context = "\n".join(f"- {r}" for r in results)
-        return self.brain.ask_grounded_stream(text, context)
+        return self.brain.ask_grounded_stream(text, context, language=language)
 
     def _system_status(self) -> str:
         status = self.system.status()
         return f"CPU {status.cpu:.0f} percent. RAM {status.ram:.0f} percent. Battery {status.battery}. WiFi {status.wifi}."
 
-    def _intelligence_status(self) -> str | Iterator[str]:
+    def _intelligence_status(self, language: str | None = None) -> str | Iterator[str]:
         from ai_suite.core.registry import ServiceContainer
         from ai_suite.intelligence import IntelligenceService
         intel = ServiceContainer.get(IntelligenceService)
@@ -496,9 +544,9 @@ class CommandRouter:
             f"{context}\n\n"
             "Now, explain these system inspection results naturally to the user."
         )
-        return self.brain.ask_grounded_stream("Tell me about my system hardware.", context, instruction=instruction)
+        return self.brain.ask_grounded_stream("Tell me about my system hardware.", context, instruction=instruction, language=language)
 
-    def _internal_entity_status(self, text: str) -> str | Iterator[str]:
+    def _internal_entity_status(self, text: str, language: str | None = None) -> str | Iterator[str]:
         lowered = text.lower()
         context = ""
         
@@ -542,7 +590,7 @@ class CommandRouter:
             "Do NOT make up features that are not listed.\n\n"
             f"{context}"
         )
-        return self.brain.ask_grounded_stream(text, context, instruction=instruction)
+        return self.brain.ask_grounded_stream(text, context, instruction=instruction, language=language)
 
     def _jarvis_status(self) -> str | Iterator[str]:
         from ai_suite.core.registry import ServiceContainer

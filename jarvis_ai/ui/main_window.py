@@ -9,6 +9,7 @@ from ai_suite.intelligence import IntelligenceService
 from PyQt5.QtCore import QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QTextCursor
 from PyQt5.QtWidgets import (
+    QComboBox,
     QApplication,
     QGraphicsDropShadowEffect,
     QGridLayout,
@@ -182,7 +183,21 @@ class JarvisContentWidget(QWidget):
 
         chat_panel = Panel()
         chat_layout = QVBoxLayout(chat_panel)
-        chat_layout.addWidget(QLabel("AI CONSOLE"))
+        
+        console_header_layout = QHBoxLayout()
+        console_header_layout.addWidget(QLabel("AI CONSOLE"))
+        console_header_layout.addStretch()
+        
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("Language: English", "en")
+        self.language_combo.addItem("Language: Hindi", "hi")
+        self.language_combo.addItem("Language: Telugu", "te")
+        self.language_combo.addItem("Language: Auto Detect", "auto")
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        console_header_layout.addWidget(self.language_combo)
+        
+        chat_layout.addLayout(console_header_layout)
+        
         chat_layout.addWidget(self.status_pill)
         indicator_row = QHBoxLayout()
         indicator_row.setSpacing(4)
@@ -272,8 +287,22 @@ class JarvisContentWidget(QWidget):
             QTimer.singleShot(i * 450, lambda msg=line: self.append_log.emit(msg))
         QTimer.singleShot(len(BOOT_LINES) * 450, lambda: self._notify("JARVIS online.", speak=True))
 
-    def _voice_text(self, text: str) -> None:
-        LOGGER.info("RAW VOICE: %s", text)
+    def _voice_text(self, payload: dict | str) -> None:
+        if isinstance(payload, dict):
+            text = payload.get("text", "")
+            error = payload.get("error")
+            if error:
+                LOGGER.info("[STT] Recognition failed: %s", error)
+                LOGGER.info("[VOICE] Recovery → listening")
+                self._notify(error, speak=True)
+                self.ai_orb.set_state(OrbState.IDLE)
+                self._set_status("SYSTEMS ONLINE")
+                return
+        else:
+            text = payload
+            payload = {"text": text}
+            
+        LOGGER.info("[WAKE] raw candidate: %s", text)
         if not self.mic_enabled:
             return
             
@@ -293,20 +322,25 @@ class JarvisContentWidget(QWidget):
             return
             
         if self.wakeword.contains_wake_word(text):
+            LOGGER.info("[WAKE] matched: TRUE")
             if is_speaking:
                 LOGGER.info("BARGE-IN DETECTED: %s", text)
                 self.speaker.interrupt()
                 # If JARVIS is interrupted by a wake word, we immediately process the new command
             
+            LOGGER.info("[WAKE] Activating command capture")
             self.set_status.emit("Listening")
             command = self.wakeword.strip_wake_word(text)
             
             if command:
                 LOGGER.info("ROUTING COMMAND: %s", command)
-                self.command_bus.submit(command)
+                payload["text"] = command
+                self.command_bus.submit(payload)
             else:
+                LOGGER.info("[ROUTER] Empty command")
                 self.speaker.speak("Yes?")
         else:
+            LOGGER.info("[WAKE] Wake detection failed (or not a wake word)")
             # If JARVIS is currently speaking, and there is no wake word and no fast-path interrupt,
             # it is VERY likely just microphone echo or ambient noise. We ignore it to prevent infinite loops.
             if is_speaking:
@@ -316,15 +350,17 @@ class JarvisContentWidget(QWidget):
 
     def _command_loop(self) -> None:
         while not self._command_stop.is_set():
-            command = self.command_bus.get(timeout=0.2)
-            if not command:
+            payload = self.command_bus.get(timeout=0.2)
+            if not payload:
                 continue
             try:
+                command = payload.get("text", "")
+                language = payload.get("language")
                 self.append_chat.emit("YOU", command)
                 self.set_status.emit("AI thinking")
                 self._sync_tts_state()
                 LOGGER.info("ROUTING COMMAND: %s", command)
-                self.router.handle(command)
+                self.router.handle(command, language=language)
             except Exception as exc:
                 LOGGER.exception("Command loop failure: %s", exc)
                 message = f"Command execution failed: {exc}"
@@ -433,6 +469,7 @@ class JarvisContentWidget(QWidget):
         if manager and (manager.is_streaming or not manager.is_idle):
             return
 
+        LOGGER.info("[VOICE] Returning to listening state")
         self.ai_orb.set_state(OrbState.IDLE if self.camera_enabled else OrbState.CAMERA_DISABLED)
         self._style_indicator(self.speaking_indicator, "Speaking: Idle", False)
 
@@ -674,6 +711,15 @@ class JarvisContentWidget(QWidget):
         glow.setOffset(0, 0)
         glow.setColor(glow_color)
         self.voice_mode_button.setGraphicsEffect(glow)
+
+    def _on_language_changed(self, index: int) -> None:
+        lang_code = self.language_combo.itemData(index)
+        lang_text = self.language_combo.itemText(index).replace("Language: ", "")
+        
+        if lang_code and hasattr(self, 'listener'):
+            self.listener.set_stt_language(lang_code)
+            self.listening_indicator.setText(f"Listening: Ready ({lang_text})")
+            LOGGER.info("STT language mode forced to: %s", lang_code)
 
     def _update_object_button(self) -> None:
         vision = self.camera.vision

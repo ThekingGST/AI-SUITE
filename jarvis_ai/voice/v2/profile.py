@@ -117,6 +117,31 @@ BalancedProfile = VoiceProfile(
     latency_preference="balanced",
 )
 
+HindiProfile = VoiceProfile(
+    name="Hindi",
+    fallback_chain=["kokoro", "piper", CONFIG.voice.default_tts_backend, "pyttsx3"],
+    quality_preference="high",
+    prefer_streaming=True,
+    language="hi",
+    backend_voice_overrides={
+        "piper": "hi_IN-rohan-medium",
+        "kokoro": "hi_IN_default",
+        CONFIG.voice.default_tts_backend: "hi-IN-SwaraNeural"
+    }
+)
+
+TeluguProfile = VoiceProfile(
+    name="Telugu",
+    fallback_chain=["piper", CONFIG.voice.default_tts_backend, "pyttsx3"],
+    quality_preference="high",
+    prefer_streaming=True,
+    language="te",
+    backend_voice_overrides={
+        "piper": "te_IN-padmavathi-medium",
+        CONFIG.voice.default_tts_backend: "te-IN-ShrutiNeural"
+    }
+)
+
 # Registry of default profiles
 DEFAULT_PROFILES: dict[str, VoiceProfile] = {
     "jarvis": JarvisProfile,
@@ -127,4 +152,6 @@ DEFAULT_PROFILES: dict[str, VoiceProfile] = {
     "fast": FastProfile,
     "studio": StudioProfile,
     "balanced": BalancedProfile,
+    "hindi": HindiProfile,
+    "telugu": TeluguProfile,
 }

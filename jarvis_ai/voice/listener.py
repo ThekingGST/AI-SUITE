@@ -16,7 +16,7 @@ class VoiceListener:
     Preserves the legacy API for existing JARVIS/FRIDAY components.
     """
 
-    def __init__(self, on_text: Callable[[str], None]) -> None:
+    def __init__(self, on_text: Callable[[dict | str], None]) -> None:
         self.on_text = on_text
         
         from jarvis_ai.voice.input.framework import AudioInputFramework
@@ -26,9 +26,14 @@ class VoiceListener:
         self._framework = AudioInputFramework(profile_name="office")
         self._framework.event_bus.subscribe(AudioEvent.RECOGNITION_FINISHED, self._on_recognition)
         self._framework.event_bus.subscribe(AudioEvent.DEVICE_ERROR, self._on_error)
+        self._framework.event_bus.subscribe(AudioEvent.RECOGNITION_FAILED, self._on_error)
         
         self.available = False
         self.error: str | None = None
+        
+    def set_stt_language(self, language: str) -> None:
+        if hasattr(self._framework, 'stt_router'):
+            self._framework.stt_router.set_language(language)
 
     def _on_recognition(self, payload: dict) -> None:
         """Handle final recognized text."""
@@ -40,12 +45,19 @@ class VoiceListener:
         
         if text:
 
-            self.on_text(text)
+            self.on_text(payload)
 
     def _on_error(self, payload: dict) -> None:
         """Handle hardware errors."""
         self.error = payload.get("error", "Unknown error")
-        self.available = False
+        
+        # If it's a recognition failure (not a hard device error), we can notify the UI
+        # without permanently marking the listener as unavailable.
+        if "speech recognition isn't available" in self.error or "missing" in self.error:
+            self.on_text({"text": "", "error": self.error})
+        else:
+            self.available = False
+            
         LOGGER.warning("VoiceListener error: %s", self.error)
 
     def start(self) -> None:
@@ -71,12 +83,14 @@ class TextCommandBus:
     """A simple queue used by UI, tests, and voice recognition to submit commands."""
 
     def __init__(self) -> None:
-        self.queue: queue.Queue[str] = queue.Queue()
+        self.queue: queue.Queue[dict] = queue.Queue()
 
-    def submit(self, text: str) -> None:
-        self.queue.put(text)
+    def submit(self, payload: dict | str) -> None:
+        if isinstance(payload, str):
+            payload = {"text": payload}
+        self.queue.put(payload)
 
-    def get(self, timeout: float = 0.1) -> str | None:
+    def get(self, timeout: float = 0.1) -> dict | None:
         try:
             return self.queue.get(timeout=timeout)
         except queue.Empty:

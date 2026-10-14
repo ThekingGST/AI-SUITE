@@ -73,7 +73,7 @@ class MemoryEngine:
         try:
             # Strip punctuation for safe FTS5 BM25 search
             clean_query = re.sub(r'[^\w\s]', '', query)
-            terms = [term for term in clean_query.split() if len(term) > 2]
+            terms = [term for term in clean_query.split() if len(term) > 0]
             if not terms:
                 return []
             fts_query = f" {operator} ".join(terms)

@@ -34,11 +34,16 @@ class VADProcessor(AudioProcessor, abc.ABC):
         is_speech = self.is_speech_frame(frame)
         current_time = frame.timestamp
         
+        # We sample the speech activity logging so it doesn't flood, or log transitions
+        
         if is_speech:
             self._last_speech_time = current_time
             if not self.is_speaking:
                 import threading
                 self.is_speaking = True
+                
+                LOGGER.info("[AUDIO] speech activity: TRUE")
+                LOGGER.info("[AUDIO] utterance started")
 
                 self._speech_start_time = current_time
                 if self.event_bus:
@@ -52,7 +57,9 @@ class VADProcessor(AudioProcessor, abc.ABC):
                 if silence_duration >= self.profile.silence_timeout_sec:
                     self.is_speaking = False
                     import threading
-
+                    LOGGER.info("[AUDIO] speech activity: FALSE")
+                    LOGGER.info("[AUDIO] utterance ended")
+                    LOGGER.info(f"[AUDIO] utterance duration: {speech_duration:.2f}s")
                     if self.event_bus:
                         self.event_bus.emit(AudioEvent.SPEECH_ENDED, {"reason": "silence"})
                         
@@ -60,7 +67,9 @@ class VADProcessor(AudioProcessor, abc.ABC):
                 elif speech_duration >= self.profile.speech_timeout_sec:
                     self.is_speaking = False
                     import threading
-
+                    LOGGER.info("[AUDIO] speech activity: FALSE")
+                    LOGGER.info("[AUDIO] utterance ended")
+                    LOGGER.info(f"[AUDIO] utterance duration: {speech_duration:.2f}s")
                     if self.event_bus:
                         self.event_bus.emit(AudioEvent.SPEECH_ENDED, {"reason": "timeout"})
 

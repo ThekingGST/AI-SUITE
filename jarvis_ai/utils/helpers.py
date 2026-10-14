@@ -6,11 +6,14 @@ import socket
 import subprocess
 import sys
 import time
+import string
 from pathlib import Path
 from typing import Iterable
 
 
 def normalize_text(text: str) -> str:
+    # Remove basic punctuation that Whisper might attach to the wake word
+    text = text.translate(str.maketrans("", "", string.punctuation))
     return re.sub(r"\s+", " ", text.strip().lower())
 
 

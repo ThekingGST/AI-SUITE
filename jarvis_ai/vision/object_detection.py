@@ -16,6 +16,9 @@ class ObjectDetector:
         self.names: dict[int, str] = {}
         if self.model is not None:
             self.names = self.model.names
+            
+        from jarvis_ai.vision.object_tracker import ObjectTracker
+        self.tracker = ObjectTracker()
 
     def detect(self, frame: np.ndarray) -> list[dict]:
         if self.model is None:
@@ -23,19 +26,9 @@ class ObjectDetector:
         try:
             results = self.model.predict(frame, conf=CONFIG.vision.object_confidence, verbose=False)
         except Exception as exc:
-            import traceback
-            import os
-            from datetime import datetime
-            from pathlib import Path
-            log_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "AISuite" / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            error_file = log_dir / "detection_error.log"
-            with open(error_file, "a", encoding="utf-8") as f:
-                f.write(f"[{datetime.now().isoformat()}] YOLO predict error:\n")
-                f.write(traceback.format_exc())
-                f.write("\n")
             LOGGER.error("Object detection failed: %s", exc)
             return []
+            
         detections: list[dict] = []
         for result in results:
             for box in result.boxes:
@@ -49,12 +42,27 @@ class ObjectDetector:
                         "confidence": conf,
                     }
                 )
-        return detections
+                
+        tracked = self.tracker.update(detections)
+        
+        # Convert back to dicts for backward compatibility with rest of system
+        out_detections = []
+        for obj in tracked:
+            out_detections.append({
+                "box": obj.box,
+                "label": obj.label,
+                "confidence": obj.confidence,
+                "id": obj.id
+            })
+            
+        return out_detections
 
     @staticmethod
     def draw(frame: np.ndarray, detections: list[dict]) -> None:
         for det in detections:
             x1, y1, x2, y2 = det["box"]
-            label = f"{det['label']} {det['confidence']:.0%}"
+            tid = det.get("id", "")
+            id_str = f"[{tid}] " if tid else ""
+            label = f"{id_str}{det['label']} {det['confidence']:.0%}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 255), 2)
             cv2.putText(frame, label, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2)

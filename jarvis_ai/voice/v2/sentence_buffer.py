@@ -97,6 +97,7 @@ class SentenceBuffer:
         import threading
 
         try:
+            LOGGER.info("[TTS] SentenceBuffer emitting chunk: %s", text)
             self._on_sentence(text)
         except Exception as exc:
             LOGGER.warning("SentenceBuffer: consumer error: %s", exc)
