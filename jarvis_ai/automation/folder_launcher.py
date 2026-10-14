@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from utils.helpers import safe_open_path
-from utils.logger import LOGGER
+from jarvis_ai.utils.helpers import safe_open_path
+from jarvis_ai.utils.logger import LOGGER
 
 
 class FolderLauncher:

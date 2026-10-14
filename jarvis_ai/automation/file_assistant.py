@@ -6,13 +6,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from utils.constants import (
+from jarvis_ai.utils.constants import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
 )
-from utils.helpers import iter_user_search_roots, safe_open_path
-from utils.logger import LOGGER
+from jarvis_ai.utils.helpers import iter_user_search_roots, safe_open_path
+from jarvis_ai.utils.logger import LOGGER
 
 
 @dataclass

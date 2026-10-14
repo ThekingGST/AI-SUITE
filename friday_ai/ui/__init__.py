@@ -1,0 +1,1 @@
+"""FRIDAY UI component library."""

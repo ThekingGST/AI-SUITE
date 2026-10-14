@@ -4,7 +4,8 @@ import importlib.util
 import threading
 import time
 
-import psutil
+from ai_suite.core.registry import ServiceContainer
+from ai_suite.intelligence import IntelligenceService
 from PyQt5.QtCore import QRect, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QTextCursor
 from PyQt5.QtWidgets import (
@@ -12,6 +13,7 @@ from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
+    QSizePolicy,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -21,29 +23,36 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QStackedWidget,
 )
 
-from ai.memory import MemoryStore
-from ai.ollama_brain import OllamaBrain
-from config import ensure_directories
-from ui.ai_core_orb import AICoreOrb, OrbState
-from ui.hologram_ui import cv_to_pixmap, offline_hologram_pixmap
-from ui.themes import HOLOGRAM_QSS
-from ui.widgets import MetricPanel, Panel, StatusPill, WaveformWidget
-from utils.constants import BOOT_LINES
-from utils.logger import LOGGER
-from vision.camera import CameraSystem
-from voice.command_router import CommandRouter
-from voice.listener import TextCommandBus, VoiceListener
-from voice.speaker import Speaker
-from voice.wakeword import WakeWordDetector
+from jarvis_ai.ai.memory import MemoryStore
+from jarvis_ai.ai.ollama_brain import OllamaBrain
+from jarvis_ai.ai.openrouter_brain import OpenRouterBrain
+from shared.config.settings_manager import SettingsManager
+from jarvis_ai.config import ensure_directories
+from jarvis_ai.ui.ai_core_orb import AICoreOrb, OrbState
+from jarvis_ai.ui.hologram_ui import cv_to_pixmap, offline_hologram_pixmap
+from jarvis_ai.ui.themes import HOLOGRAM_QSS
+from jarvis_ai.ui.widgets import MetricPanel, Panel, StatusPill, WaveformWidget, ControlChip, IconLabel
+from jarvis_ai.utils.constants import BOOT_LINES
+from jarvis_ai.utils.logger import LOGGER
+from jarvis_ai.vision.camera import CameraSystem
+from jarvis_ai.voice.command_router import CommandRouter
+from jarvis_ai.voice.listener import TextCommandBus, VoiceListener
+from jarvis_ai.voice.speaker import Speaker
+from jarvis_ai.voice.v2.events import VoiceEvent
+from jarvis_ai.voice.wakeword import WakeWordDetector
 
 
-class MainWindow(QMainWindow):
+
+class JarvisContentWidget(QWidget):
     append_chat = pyqtSignal(str, str)
     append_log = pyqtSignal(str)
     set_status = pyqtSignal(str)
     registration_done = pyqtSignal(str)
+    speech_started = pyqtSignal(str)
+    speech_finished = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -53,7 +62,11 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(HOLOGRAM_QSS)
 
         self.memory = MemoryStore()
-        self.brain = OllamaBrain(self.memory)
+        provider = SettingsManager().get("ai_provider", "local")
+        if provider == "cloud":
+            self.brain = OpenRouterBrain(self.memory)
+        else:
+            self.brain = OllamaBrain(self.memory)
         self.speaker = Speaker()
         self.tts_enabled = True
         self.mic_enabled = True
@@ -82,21 +95,39 @@ class MainWindow(QMainWindow):
         self.set_status.connect(self._set_status)
         self.registration_done.connect(lambda msg: self._notify(msg, speak=True))
 
+        self.speech_started.connect(self._on_speech_started)
+        self.speech_finished.connect(self._on_speech_finished)
+
+        # Wire VoiceEventBus to PyQt signals
+        self.speaker.event_bus.subscribe(
+            VoiceEvent.SPEECH_STARTED,
+            lambda e: self.speech_started.emit(e.data.get("text", ""))
+        )
+        self.speaker.event_bus.subscribe(
+            VoiceEvent.SPEECH_FINISHED,
+            lambda e: self.speech_finished.emit()
+        )
+        self.speaker.event_bus.subscribe(
+            VoiceEvent.SPEECH_INTERRUPTED,
+            lambda e: self.speech_finished.emit()
+        )
+
         self.camera.start()
+        self.camera.set_camera_enabled(self.camera_enabled)
         self.listener.start()
         self._command_thread.start()
         self._boot()
         threading.Thread(target=self._run_startup_diagnostics, name="JarvisDiagnostics", daemon=True).start()
 
     def _build_ui(self) -> None:
-        central = QWidget()
-        root = QGridLayout(central)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(12)
+        root = QGridLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
 
         self.camera_label = QLabel("CAMERA OFFLINE")
         self.camera_label.setAlignment(Qt.AlignCenter)
-        self.camera_label.setMinimumSize(760, 430)
+        self.camera_label.setMinimumSize(320, 240)
+        self.camera_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.ai_orb = AICoreOrb()
         self.ai_orb.setFixedSize(148, 148)
         self.ai_orb.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -115,17 +146,17 @@ class MainWindow(QMainWindow):
         self.chat.setReadOnly(True)
         self.status_pill = StatusPill()
         self.waveform = WaveformWidget()
-        self.speaking_indicator = QLabel("Speaking: Idle")
-        self.listening_indicator = QLabel("Listening: Ready")
-        self.muted_indicator = QLabel("Voice: Online")
-        self.mic_indicator = QLabel("Mic: Active")
-        self.detection_indicator = QLabel("Detection Disabled")
-        self.identity_indicator = QLabel("Identity: UNKNOWN")
-        self.confidence_indicator = QLabel("Confidence: 0.00")
+        self.speaking_indicator = IconLabel("activity", "Speaking: Idle")
+        self.listening_indicator = IconLabel("mic", "Listening: Ready")
+        self.muted_indicator = IconLabel("volume-2", "Voice: Online")
+        self.mic_indicator = IconLabel("mic", "Mic: Active")
+        self.detection_indicator = IconLabel("target", "Detection Disabled")
+        self.identity_indicator = IconLabel("user", "Identity: UNKNOWN")
+        self.confidence_indicator = IconLabel("zap", "Confidence: 0.00")
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText("Type a command or question...")
         self.command_input.returnPressed.connect(self._submit_text_command)
-        send_button = QPushButton("Transmit")
+        send_button = ControlChip("send", "Transmit")
         send_button.clicked.connect(self._submit_text_command)
         input_row = QHBoxLayout()
         input_row.addWidget(self.command_input, 1)
@@ -135,6 +166,8 @@ class MainWindow(QMainWindow):
         chat_layout.addWidget(QLabel("AI CONSOLE"))
         chat_layout.addWidget(self.status_pill)
         indicator_row = QHBoxLayout()
+        indicator_row.setSpacing(4)
+        indicator_row.setContentsMargins(0, 0, 0, 0)
         for indicator in (
             self.speaking_indicator,
             self.listening_indicator,
@@ -144,7 +177,6 @@ class MainWindow(QMainWindow):
             self.identity_indicator,
             self.confidence_indicator,
         ):
-            indicator.setAlignment(Qt.AlignCenter)
             indicator_row.addWidget(indicator)
         chat_layout.addLayout(indicator_row)
         chat_layout.addWidget(self.chat, 1)
@@ -161,31 +193,34 @@ class MainWindow(QMainWindow):
         self.ram_panel = MetricPanel("RAM")
         controls = Panel()
         control_layout = QHBoxLayout(controls)
-        self.camera_button = QPushButton("Disable Camera")
+        control_layout.setSpacing(4)
+        control_layout.setContentsMargins(6, 6, 6, 6)
+        self.camera_button = ControlChip("camera", "Disable Camera")
         self.camera_button.clicked.connect(self._toggle_camera)
-        self._style_camera_button(active=True)
+        self.camera_enabled = True
+        self._update_camera_button()
         control_layout.addWidget(self.camera_button)
-        self.object_button = QPushButton("Enable Object Detection")
+        self.object_button = ControlChip("target", "Detection OFF")
         self.object_button.clicked.connect(self._toggle_objects)
         self._update_object_button()
         control_layout.addWidget(self.object_button)
-        for label, callback in (
-            ("Photo", self._take_photo),
-            ("Register Face", self._register_face_prompt),
-            ("Refresh LLM", self._refresh_llm),
+        for icon_name, label, callback in (
+            ("aperture", "Snapshot", self._take_photo),
+            ("user", "Register", self._register_face_prompt),
+            ("refresh-cw", "Refresh", self._refresh_llm),
         ):
-            button = QPushButton(label)
+            button = ControlChip(icon_name, label)
             button.clicked.connect(callback)
             control_layout.addWidget(button)
-        self.mute_button = QPushButton("Mute")
+        self.mute_button = ControlChip("volume-2", "Mute")
         self.mute_button.clicked.connect(self._toggle_tts)
         self._update_mute_button()
         control_layout.insertWidget(2, self.mute_button)
-        self.mic_button = QPushButton("Mic ON")
+        self.mic_button = ControlChip("mic", "Mic ON")
         self.mic_button.clicked.connect(self._toggle_mic)
         self._update_mic_button()
         control_layout.insertWidget(3, self.mic_button)
-        self.voice_mode_button = QPushButton("Standard Voice")
+        self.voice_mode_button = ControlChip("smile", "Standard Voice")
         self.voice_mode_button.clicked.connect(self._toggle_voice_mode)
         self._update_voice_mode_button()
         control_layout.insertWidget(4, self.voice_mode_button)
@@ -196,7 +231,10 @@ class MainWindow(QMainWindow):
         root.addWidget(self.ram_panel, 2, 1)
         root.addWidget(log_panel, 3, 0, 1, 3)
         root.addWidget(controls, 4, 0, 1, 3)
-        self.setCentralWidget(central)
+
+        root.setRowStretch(0, 1)
+        root.setRowStretch(1, 1)
+        root.setRowStretch(3, 1)
 
     def _wire_timers(self) -> None:
         self.frame_timer = QTimer(self)
@@ -215,23 +253,47 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(len(BOOT_LINES) * 450, lambda: self._notify("JARVIS online.", speak=True))
 
     def _voice_text(self, text: str) -> None:
-        print("RAW VOICE:", text)
         LOGGER.info("RAW VOICE: %s", text)
         if not self.mic_enabled:
             return
-        if self.speaker.recently_spoke() and self.wakeword.contains_wake_word(text):
-            self.append_log.emit("Ignored microphone echo from speaker output.")
+            
+        manager = getattr(self.speaker, "manager", None)
+        is_speaking = manager and not manager.is_idle
+        
+        # Fast-path for interruption commands
+        import re
+        lowered = text.lower()
+        interrupt_pattern = r'\b(stop|cancel|enough|quiet|never mind|shut up|be quiet|silence|mute)\b'
+        
+        if re.search(interrupt_pattern, lowered):
+            LOGGER.info("FAST PATH INTERRUPT: %s", lowered)
+            self.speaker.interrupt()
+            if "mute" in lowered:
+                self._toggle_tts()
             return
-        self.append_log.emit(f"Heard: {text}")
+            
         if self.wakeword.contains_wake_word(text):
+            if is_speaking:
+                LOGGER.info("BARGE-IN DETECTED: %s", text)
+                self.speaker.interrupt()
+                # If JARVIS is interrupted by a wake word, we immediately process the new command
+            
             self.set_status.emit("Listening")
             command = self.wakeword.strip_wake_word(text)
+            
             if command:
                 LOGGER.info("ROUTING COMMAND: %s", command)
                 self.command_bus.submit(command)
             else:
                 print("DEBUG TTS:", "Yes?")
                 self.speaker.speak("Yes?")
+        else:
+            # If JARVIS is currently speaking, and there is no wake word and no fast-path interrupt,
+            # it is VERY likely just microphone echo or ambient noise. We ignore it to prevent infinite loops.
+            if is_speaking:
+                self.append_log.emit("Ignored ambient noise/echo during speech.")
+                return
+            self.append_log.emit(f"Heard: {text}")
 
     def _command_loop(self) -> None:
         while not self._command_stop.is_set():
@@ -241,7 +303,6 @@ class MainWindow(QMainWindow):
             try:
                 self.append_chat.emit("YOU", command)
                 self.set_status.emit("AI thinking")
-                self.ai_orb.set_state(OrbState.THINKING)
                 self._sync_tts_state()
                 LOGGER.info("ROUTING COMMAND: %s", command)
                 self.router.handle(command)
@@ -249,7 +310,6 @@ class MainWindow(QMainWindow):
                 LOGGER.exception("Command loop failure: %s", exc)
                 message = f"Command execution failed: {exc}"
                 self.append_chat.emit("JARVIS", message)
-                print("DEBUG TTS:", message)
                 self.speaker.speak(message)
             finally:
                 self.set_status.emit("Systems online")
@@ -261,7 +321,7 @@ class MainWindow(QMainWindow):
             self.command_bus.submit(text)
 
     def _update_frame(self) -> None:
-        frame = self.camera.latest_frame()
+        frame = self.camera.latest_frame() if self.camera_enabled else None
         if frame is None:
             self._offline_tick += 1
             self.ai_orb.set_state(OrbState.CAMERA_DISABLED if not self.camera_enabled else OrbState.OFFLINE)
@@ -276,8 +336,67 @@ class MainWindow(QMainWindow):
         self._position_orb(frame)
 
     def _update_metrics(self) -> None:
-        self.cpu_panel.set_value(psutil.cpu_percent(interval=None))
-        self.ram_panel.set_value(psutil.virtual_memory().percent)
+        intel = ServiceContainer.get(IntelligenceService)
+        if intel:
+            cpu = intel.inspect("cpu").metrics.get("usage_percent", 0.0)
+            ram = intel.inspect("memory").metrics.get("usage_percent", 0.0)
+            self.cpu_panel.set_value(cpu)
+            self.ram_panel.set_value(ram)
+
+    def _on_speech_started(self, text: str) -> None:
+        self.append_log.emit("Speaking...")
+        self.ai_orb.set_state(OrbState.SPEAKING)
+        self._style_indicator(self.speaking_indicator, "Speaking...", True)
+        # We do NOT pause the microphone here anymore. This allows barge-in.
+
+    def _on_speech_finished(self) -> None:
+        # Check if we are still streaming or have queued speech
+        manager = getattr(self.speaker, "manager", None)
+        if manager and (manager.is_streaming or not manager.is_idle):
+            return
+
+        self.ai_orb.set_state(OrbState.IDLE if self.camera_enabled else OrbState.CAMERA_DISABLED)
+        self._style_indicator(self.speaking_indicator, "Speaking: Idle", False)
+
+    def _update_live_indicators(self) -> None:
+        if self.tts_enabled:
+            mode_label = "Premium" if self.speaker.voice_mode == "premium" else "Standard"
+            engine = self.speaker.active_engine_name.title()
+            self._style_indicator(self.muted_indicator, f"Voice: {mode_label} ({engine})", True)
+        else:
+            self.muted_indicator.setText("Muted")
+            self.muted_indicator.setStyleSheet("color: #ffe8ec; border: 1px solid #ff4057; border-radius: 5px; padding: 3px; background: rgba(95, 15, 24, 150);")
+        if self.mic_enabled:
+            self._style_indicator(self.mic_indicator, "Mic: Active", True)
+        else:
+            self.mic_indicator.setText("Mic: Muted")
+            self.mic_indicator.setStyleSheet("color: #ffe8ec; border: 1px solid #ff4057; border-radius: 5px; padding: 3px; background: rgba(95, 15, 24, 150);")
+        vision = self.camera.vision
+        det_text = "Detection Disabled"
+        det_active = False
+        
+        if vision.vision_enabled:
+            if vision.object_worker and vision.object_worker.snapshot().enabled:
+                det_text = "Detection Active"
+                det_active = True
+            else:
+                det_text = "Detection Unavailable"
+                det_active = False
+                
+        self._style_indicator(
+            self.detection_indicator,
+            det_text,
+            det_active,
+        )
+        snapshot = self.camera.vision.snapshot()
+        known = [(label, score) for _, label, score in snapshot.identities if label != "unknown"]
+        if known:
+            name, score = max(known, key=lambda item: item[1])
+            self._style_indicator(self.identity_indicator, f"Identity: {name.upper()}", True)
+            self._style_indicator(self.confidence_indicator, f"Confidence: {score:.2f}", True)
+        else:
+            self._style_indicator(self.identity_indicator, "Identity: UNKNOWN", False)
+            self._style_indicator(self.confidence_indicator, "Confidence: 0.00", False)
 
     def _update_live_indicators(self) -> None:
         self._sync_mic_with_speech()
@@ -344,9 +463,11 @@ class MainWindow(QMainWindow):
         add_next()
 
     def _append_log(self, text: str) -> None:
+        # Avoid double-logging MIC PAUSED and MIC RESUMED since the framework already logs them
+        if not text.startswith("User:") and not text.startswith("Jarvis:") and text not in ("MIC PAUSED", "MIC RESUMED"):
+            LOGGER.info(text)
         self.logs.addItem(time.strftime("%H:%M:%S") + "  " + text)
         self.logs.scrollToBottom()
-        LOGGER.info(text)
 
     def _set_status(self, text: str) -> None:
         self.status_pill.set_status(text)
@@ -369,25 +490,29 @@ class MainWindow(QMainWindow):
         return "Unknown vision command."
 
     def _toggle_camera(self) -> None:
-        self.camera_enabled = not self.camera_enabled
-        if self.camera_enabled:
-            self.camera.start()
-            self.camera_button.setText("Disable Camera")
-            self._style_camera_button(active=True)
+        if not self.camera_enabled:
+            self.camera_enabled = True
+            self.camera.set_camera_enabled(True)
+            self._update_camera_button()
+            self._update_object_button()
             self._notify("Camera enabled", speak=False)
         else:
-            self.camera.vision.set_object_detection_enabled(False)
-            self.camera.stop()
+            self.camera_enabled = False
+            self.camera.vision.set_vision_enabled(False)
+            self.camera.set_camera_enabled(False)
             self._update_object_button()
-            self.camera_button.setText("Enable Camera")
-            self._style_camera_button(active=False)
+            self._update_camera_button()
             self._notify("Camera disabled", speak=False)
 
     def _toggle_objects(self) -> None:
-        enabled = not self.camera.vision.object_detection_enabled
-        self.camera.vision.set_object_detection_enabled(enabled)
+        enabled = not self.camera.vision.vision_enabled
+        success = self.camera.vision.set_vision_enabled(enabled)
         self._update_object_button()
-        self._notify("Object detection enabled" if enabled else "Object detection disabled", speak=False)
+        if success:
+            self._notify("Vision detection enabled" if enabled else "Vision detection disabled", speak=False)
+        else:
+            self.object_button.setText("Detection Error")
+            self._notify("Detection Error! See Logs / Diagnostics", speak=False)
 
     def _take_photo(self) -> None:
         self._notify("Photo saved: " + self.camera.capture_photo(), speak=True)
@@ -417,6 +542,7 @@ class MainWindow(QMainWindow):
             if frame is None:
                 time.sleep(0.15)
                 continue
+            # Use detector explicitly since vision could be offline
             faces = self.camera.vision.face_detector.detect(frame)
             if faces:
                 self.append_log.emit("FACE DETECTED")
@@ -469,47 +595,17 @@ class MainWindow(QMainWindow):
     def _notify(self, text: str, speak: bool = False) -> None:
         self.append_log.emit(text)
         if speak:
-            print("DEBUG TTS:", text)
             self.speaker.speak(text)
-
-    def _sync_mic_with_speech(self) -> None:
-        if self.speaker.is_speaking and self.mic_enabled and not self._mic_paused_for_speech:
-            self.listener.pause()
-            self._mic_paused_for_speech = True
-            self.append_log.emit("MIC PAUSED")
-        elif not self.speaker.is_speaking and self._mic_paused_for_speech:
-            self._mic_paused_for_speech = False
-            if self.mic_enabled:
-                self.listener.resume()
-                self.append_log.emit("MIC RESUMED")
 
     def _update_mute_button(self) -> None:
         if self.tts_enabled:
             self.mute_button.setText("Mute")
+            self.mute_button.set_state(active=True, error=False)
             glow_color = QColor(34, 216, 255, 210)
-            self.mute_button.setStyleSheet(
-                "QPushButton {"
-                "background: #0b5164;"
-                "border: 1px solid #22d8ff;"
-                "border-radius: 6px;"
-                "color: #e8fdff;"
-                "padding: 8px 12px;"
-                "}"
-                "QPushButton:hover { background: #0f6f87; }"
-            )
         else:
             self.mute_button.setText("Unmute")
+            self.mute_button.set_state(active=False, error=True)
             glow_color = QColor(255, 64, 87, 220)
-            self.mute_button.setStyleSheet(
-                "QPushButton {"
-                "background: #6b1018;"
-                "border: 1px solid #ff4057;"
-                "border-radius: 6px;"
-                "color: #ffe8ec;"
-                "padding: 8px 12px;"
-                "}"
-                "QPushButton:hover { background: #8b1621; }"
-            )
         glow = QGraphicsDropShadowEffect(self.mute_button)
         glow.setBlurRadius(22)
         glow.setOffset(0, 0)
@@ -519,18 +615,12 @@ class MainWindow(QMainWindow):
     def _update_mic_button(self) -> None:
         if self.mic_enabled:
             self.mic_button.setText("Mic ON")
+            self.mic_button.set_state(active=True, error=False)
             glow_color = QColor(34, 216, 255, 210)
-            self.mic_button.setStyleSheet(
-                "QPushButton {background: #0b5164; border: 1px solid #22d8ff; border-radius: 6px; color: #e8fdff; padding: 8px 12px;}"
-                "QPushButton:hover { background: #0f6f87; }"
-            )
         else:
             self.mic_button.setText("Mic OFF")
+            self.mic_button.set_state(active=False, error=True)
             glow_color = QColor(255, 64, 87, 220)
-            self.mic_button.setStyleSheet(
-                "QPushButton {background: #6b1018; border: 1px solid #ff4057; border-radius: 6px; color: #ffe8ec; padding: 8px 12px;}"
-                "QPushButton:hover { background: #8b1621; }"
-            )
         glow = QGraphicsDropShadowEffect(self.mic_button)
         glow.setBlurRadius(22)
         glow.setOffset(0, 0)
@@ -539,32 +629,9 @@ class MainWindow(QMainWindow):
 
     def _update_voice_mode_button(self) -> None:
         is_premium = self.speaker.voice_mode == "premium"
-        if is_premium:
-            self.voice_mode_button.setText("Premium Voice")
-            glow_color = QColor(255, 165, 0, 220)
-            self.voice_mode_button.setStyleSheet(
-                "QPushButton {"
-                "background: #4a3000;"
-                "border: 1px solid #ffa500;"
-                "border-radius: 6px;"
-                "color: #fff3d6;"
-                "padding: 8px 12px;"
-                "}"
-                "QPushButton:hover { background: #6b4400; }"
-            )
-        else:
-            self.voice_mode_button.setText("Standard Voice")
-            glow_color = QColor(90, 120, 130, 160)
-            self.voice_mode_button.setStyleSheet(
-                "QPushButton {"
-                "background: #17313a;"
-                "border: 1px solid #446b76;"
-                "border-radius: 6px;"
-                "color: #e8fdff;"
-                "padding: 8px 12px;"
-                "}"
-                "QPushButton:hover { background: #21434d; }"
-            )
+        self.voice_mode_button.setText("Premium Voice" if is_premium else "Standard Voice")
+        self.voice_mode_button.set_state(active=is_premium, error=False)
+        glow_color = QColor(255, 165, 0, 220) if is_premium else QColor(90, 120, 130, 160)
         glow = QGraphicsDropShadowEffect(self.voice_mode_button)
         glow.setBlurRadius(22 if is_premium else 8)
         glow.setOffset(0, 0)
@@ -572,34 +639,33 @@ class MainWindow(QMainWindow):
         self.voice_mode_button.setGraphicsEffect(glow)
 
     def _update_object_button(self) -> None:
-        enabled = self.camera.vision.object_detection_enabled
-        self.object_button.setText("Disable Object Detection" if enabled else "Enable Object Detection")
-        glow_color = QColor(34, 216, 255, 220) if enabled else QColor(90, 120, 130, 160)
-        self.object_button.setStyleSheet(
-            "QPushButton {"
-            f"background: {'#0b5164' if enabled else '#17313a'};"
-            f"border: 1px solid {'#22d8ff' if enabled else '#446b76'};"
-            "border-radius: 6px;"
-            "color: #e8fdff;"
-            "padding: 8px 12px;"
-            "}"
-            f"QPushButton:hover {{ background: {'#0f6f87' if enabled else '#21434d'}; }}"
-        )
+        vision = self.camera.vision
+        button_text = "Detection OFF"
+        active = False
+        
+        if vision.vision_enabled:
+            if vision.object_worker and vision.object_worker.snapshot().enabled:
+                button_text = "Detection ON"
+                active = True
+            else:
+                button_text = "Detection Error"
+                active = False
+                
+        self.object_button.setText(button_text)
+        self.object_button.set_state(active=active, error=vision.vision_enabled and not active)
+        glow_color = QColor(34, 216, 255, 220) if active else (QColor(255, 64, 87, 210) if button_text == "Detection Error" else QColor(90, 120, 130, 160))
+
         glow = QGraphicsDropShadowEffect(self.object_button)
-        glow.setBlurRadius(22 if enabled else 8)
+        glow.setBlurRadius(22 if active else 8)
         glow.setOffset(0, 0)
         glow.setColor(glow_color)
         self.object_button.setGraphicsEffect(glow)
 
-    def _style_camera_button(self, active: bool) -> None:
+    def _update_camera_button(self) -> None:
+        active = self.camera_enabled
+        self.camera_button.setText("Camera ON" if active else "Camera OFF")
+        self.camera_button.set_state(active=active, error=not active)
         glow_color = QColor(34, 216, 255, 220) if active else QColor(255, 64, 87, 210)
-        self.camera_button.setStyleSheet(
-            "QPushButton {"
-            f"background: {'#0b5164' if active else '#6b1018'};"
-            f"border: 1px solid {'#22d8ff' if active else '#ff4057'};"
-            "border-radius: 6px; color: #e8fdff; padding: 8px 12px;"
-            "}"
-        )
         glow = QGraphicsDropShadowEffect(self.camera_button)
         glow.setBlurRadius(22)
         glow.setOffset(0, 0)
@@ -661,7 +727,7 @@ class MainWindow(QMainWindow):
             "Automation modules": importlib.util.find_spec("pycaw") is not None,
         }
         for name, ok in checks.items():
-            self.append_log.emit(("OK " if ok else "MISSING ") + name)
+            self.append_log.emit(("[ OK ] " if ok else "[ MISSING ] ") + name)
 
     @staticmethod
     def _style_indicator(label: QLabel, text: str, active: bool) -> None:
@@ -679,6 +745,35 @@ class MainWindow(QMainWindow):
         self.camera.stop()
         self.speaker.close()
         event.accept()
+
+
+class MainWindow(QMainWindow):
+    """Standalone launcher wrapper for JARVIS."""
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("JARVIS AI Desktop Assistant")
+        self.resize(1380, 820)
+        
+        true_central = QWidget()
+        true_root = QHBoxLayout(true_central)
+        true_root.setContentsMargins(0, 0, 0, 0)
+        true_root.setSpacing(0)
+        
+        from ai_suite.ui.sidebar import Sidebar
+        self.sidebar = Sidebar()
+        true_root.addWidget(self.sidebar)
+        
+        self.stack = QStackedWidget()
+        true_root.addWidget(self.stack, 1)
+        
+        self.jarvis_content = JarvisContentWidget()
+        self.stack.addWidget(self.jarvis_content)
+        
+        self.setCentralWidget(true_central)
+        
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.jarvis_content.closeEvent(event)
+        super().closeEvent(event)
 
 
 def run_app() -> int:

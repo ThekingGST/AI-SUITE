@@ -4,8 +4,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from utils.helpers import clamp
-from utils.logger import LOGGER
+from jarvis_ai.utils.helpers import clamp
+from jarvis_ai.utils.logger import LOGGER
 
 
 @dataclass

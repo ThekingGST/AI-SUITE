@@ -7,11 +7,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from core.model_manager import ModelManager
-from config import CONFIG, FACE_EMBEDDINGS_DB, FACE_DATASET_DIR, OWNER_EMBEDDINGS
-from utils.helpers import timestamp_slug
-from utils.logger import LOGGER
-from vision.face_detection import FaceBox
+from jarvis_ai.core.model_manager import ModelManager
+from jarvis_ai.config import CONFIG, FACE_EMBEDDINGS_DB, FACE_DATASET_DIR, OWNER_EMBEDDINGS
+from jarvis_ai.utils.helpers import timestamp_slug
+from jarvis_ai.utils.logger import LOGGER
+from jarvis_ai.vision.face_detection import FaceBox
 
 
 class FaceRecognizer:
@@ -52,31 +52,53 @@ class FaceRecognizer:
                 self.named_embeddings = {}
 
     def _compute_adaptive_thresholds(self) -> None:
-        """Compute a per-identity threshold from cluster compactness.
+        """Compute a per-identity recognition threshold from cluster statistics.
 
-        Insight: all registration images from a single session produce a
-        very compact embedding cluster (average pairwise cosine ≈ 0.97).
-        A stranger — even a close relative — scores slightly below this
-        compactness (e.g. 0.96).  By setting the threshold just below the
-        cluster compactness, we reject impostors that a fixed threshold
-        would miss.
+        Mathematical reasoning
+        ----------------------
+        For each identity we have N registered embeddings.  We compute:
 
-        Steps:
-        1. Iteratively prune embeddings whose avg similarity to peers
-           is below compactness * 0.95 (they weaken the cluster).
-        2. Compute adaptive_threshold = compactness * 0.99.
-        3. Clamp to max(global_threshold, adaptive_threshold).
+        - **compactness**: mean pairwise cosine similarity within the cluster.
+        - **min_pair**: the lowest pairwise cosine in the cluster — i.e. the
+          most dissimilar pair of genuine images.
+        - **spread**: ``compactness - min_pair``, measuring how much natural
+          variation exists within the registration set.
+
+        A new genuine observation should score at least as well as the worst
+        registered pair, minus a margin that accounts for new-observation
+        variation (different lighting, slight pose change, etc.).
+
+        Formula::
+
+            raw = min_pair - spread * 2.0
+            adaptive = clamp(raw, floor, ceiling)
+
+        Where:
+        - ``floor``   = ``face_match_threshold`` (global minimum, default 0.70)
+        - ``ceiling`` = ``face_match_ceiling`` (configurable max, default 0.85)
+
+        Why this works:
+        - For **compact clusters** (single-session registration), min_pair ≈
+          compactness ≈ 0.99 and spread ≈ 0.005, so raw ≈ 0.98.  The ceiling
+          clamp pulls this down to 0.85, preventing over-tightening.
+        - For **diverse clusters** (multi-session, varied lighting), min_pair
+          is naturally lower and spread is larger, producing a lower raw value
+          that falls between floor and ceiling without clamping.
+        - The floor ensures we never accept wildly dissimilar faces.
         """
-        global_thr = CONFIG.vision.face_match_threshold
+        floor = CONFIG.vision.face_match_threshold
+        ceiling = CONFIG.vision.face_match_ceiling
         dirty = False
+
         for name, vectors in list(self.named_embeddings.items()):
             if len(vectors) < 3:
-                self._adaptive_thresholds[name] = global_thr
+                self._adaptive_thresholds[name] = floor
                 continue
 
             arr = np.array(vectors, dtype=np.float32)
-            # Iterative pruning: remove embeddings that are too far
-            # from the rest of the cluster.
+
+            # Iterative pruning: remove embeddings whose average similarity
+            # to peers is anomalously low (contamination guard).
             pruned = True
             while pruned and len(arr) >= 3:
                 pruned = False
@@ -86,8 +108,7 @@ class FaceRecognizer:
                     for j in range(i + 1, n):
                         pairs.append(self._cosine(arr[i], arr[j]))
                 compactness = float(np.mean(pairs))
-                prune_thr = compactness * 0.95
-                # Compute per-embedding avg similarity
+                prune_thr = compactness * 0.90
                 avg_sims = []
                 for i in range(n):
                     sims = [self._cosine(arr[i], arr[j])
@@ -109,20 +130,27 @@ class FaceRecognizer:
             if dirty:
                 self.named_embeddings[name] = [row.tolist() for row in arr]
 
-            # Final compactness after pruning
+            # Final cluster statistics after pruning
             n = len(arr)
             pairs = []
             for i in range(n):
                 for j in range(i + 1, n):
                     pairs.append(self._cosine(arr[i], arr[j]))
             compactness = float(np.mean(pairs))
-            adaptive = compactness * 0.99
-            final = max(global_thr, adaptive)
-            self._adaptive_thresholds[name] = final
+            min_pair = float(min(pairs))
+            spread = compactness - min_pair
+
+            # Adaptive threshold: statistical lower bound with clamp
+            raw = min_pair - spread * 2.0
+            adaptive = max(floor, min(ceiling, raw))
+            self._adaptive_thresholds[name] = adaptive
+
             LOGGER.info(
                 "ADAPTIVE THRESHOLD for '%s': embeddings=%d compactness=%.4f "
-                "adaptive=%.4f final=%.4f (global=%.4f)",
-                name, n, compactness, adaptive, final, global_thr,
+                "min_pair=%.4f spread=%.4f raw=%.4f => clamped=%.4f "
+                "(floor=%.4f ceiling=%.4f)",
+                name, n, compactness, min_pair, spread, raw,
+                adaptive, floor, ceiling,
             )
 
         if dirty:
@@ -223,19 +251,30 @@ class FaceRecognizer:
         best_name, best_score, best_thr, best_agree, best_total = ranked[0]
         runner_up_score = ranked[1][1] if len(ranked) > 1 else 0.0
         runner_up_name = ranked[1][0] if len(ranked) > 1 else ""
+        margin = best_score - runner_up_score if len(ranked) > 1 else 1.0
+        agree_pct = (best_agree / best_total * 100) if best_total else 0.0
 
-        LOGGER.info(
-            "FACE MATCH: best=%s score=%.3f thr=%.3f agree=%d/%d "
-            "runner_up=%s %.3f",
-            best_name, best_score, best_thr,
-            best_agree, best_total,
-            runner_up_name, runner_up_score,
+        # ── Structured diagnostic log (DEBUG level — disable in production) ──
+        LOGGER.debug(
+            "RECOGNITION DIAGNOSTICS\n"
+            "  Identity:          %s\n"
+            "  Top-K Score:       %.4f\n"
+            "  Adaptive Threshold:%.4f\n"
+            "  Global Threshold:  %.4f\n"
+            "  Agreement:         %d/%d (%.0f%%)\n"
+            "  Runner-up:         %s (%.4f)\n"
+            "  Margin:            %.4f",
+            best_name, best_score,
+            best_thr, global_thr,
+            best_agree, best_total, agree_pct,
+            runner_up_name or "N/A", runner_up_score,
+            margin,
         )
 
         # Gate 1: score must exceed the per-identity adaptive threshold.
         if best_score < best_thr:
-            LOGGER.info(
-                "FACE REJECTED: %.3f < adaptive_threshold %.3f",
+            LOGGER.debug(
+                "  DECISION: REJECTED (Gate 1 — score %.4f < threshold %.4f)",
                 best_score, best_thr,
             )
             return None
@@ -243,23 +282,25 @@ class FaceRecognizer:
         # Gate 2: at least 60% of stored embeddings must individually agree.
         min_agree = max(1, int(best_total * 0.6))
         if best_agree < min_agree:
-            LOGGER.info(
-                "FACE REJECTED: agree=%d/%d < min_agree=%d",
+            LOGGER.debug(
+                "  DECISION: REJECTED (Gate 2 — agree %d/%d < required %d)",
                 best_agree, best_total, min_agree,
             )
             return None
 
         # Gate 3: margin guard for multi-identity disambiguation.
         if len(ranked) > 1 and runner_up_score >= global_thr:
-            margin = best_score - runner_up_score
             if margin < 0.15:
-                LOGGER.info(
-                    "FACE REJECTED (ambiguous): %s %.3f vs %s %.3f margin=%.3f",
-                    best_name, best_score,
-                    runner_up_name, runner_up_score, margin,
+                LOGGER.debug(
+                    "  DECISION: REJECTED (Gate 3 — ambiguous margin %.4f < 0.15)",
+                    margin,
                 )
                 return None
 
+        LOGGER.debug(
+            "  DECISION: ACCEPTED as '%s' (score=%.4f)",
+            best_name, best_score,
+        )
         return (best_name, best_score)
 
     # ── embedding extraction ─────────────────────────────────────────
@@ -267,10 +308,30 @@ class FaceRecognizer:
     def embedding(self, frame: np.ndarray, face: FaceBox) -> np.ndarray | None:
         if self.session is None:
             return None
-        crop = frame[face.y : face.y + face.h, face.x : face.x + face.w]
-        if crop.size == 0:
+        # Minimum face size guard: too-small crops produce unreliable embeddings
+        min_size = CONFIG.vision.face_min_size
+        if face.w < min_size or face.h < min_size:
+            LOGGER.debug(
+                "Face too small (%dx%d < %d), skipping embedding.",
+                face.w, face.h, min_size,
+            )
             return None
-        image = cv2.resize(crop, (112, 112))
+            
+        from jarvis_ai.vision.face_aligner import FaceAligner
+        
+        aligner = FaceAligner()
+        if getattr(CONFIG.vision, "alignment_enabled", True):
+            image = aligner.align(frame, face)
+        else:
+            # Fallback for when alignment is disabled via config
+            crop = frame[face.y : face.y + face.h, face.x : face.x + face.w]
+            if crop.size == 0:
+                return None
+            image = cv2.resize(crop, (112, 112))
+
+        if image is None:
+            return None
+
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32)
         image = (image - 127.5) / 128.0
         tensor = np.transpose(image, (2, 0, 1))[None, :, :, :]
@@ -286,7 +347,7 @@ class FaceRecognizer:
 
     @staticmethod
     def save_intruder(frame: np.ndarray) -> Path:
-        from config import INTRUDER_DIR
+        from jarvis_ai.config import INTRUDER_DIR
 
         path = INTRUDER_DIR / f"intruder_{timestamp_slug()}.jpg"
         cv2.imwrite(str(path), frame)

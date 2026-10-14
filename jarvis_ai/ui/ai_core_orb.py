@@ -30,13 +30,14 @@ class AICoreOrb(QWidget):
         self.setMinimumSize(160, 160)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
-        self.timer.start(33)
 
     def set_state(self, state: OrbState | str) -> None:
         self.state = state if isinstance(state, OrbState) else OrbState(str(state))
         self.update()
 
     def _tick(self) -> None:
+        if not self.isVisible():
+            return
         speed = {
             OrbState.IDLE: 0.045,
             OrbState.LISTENING: 0.09,
@@ -49,7 +50,17 @@ class AICoreOrb(QWidget):
         self.phase = (self.phase + speed) % (math.pi * 2)
         self.update()
 
+    def showEvent(self, event) -> None:
+        self.timer.start(33)
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        self.timer.stop()
+        super().hideEvent(event)
+
     def paintEvent(self, event) -> None:  # noqa: N802
+        if self.width() == 0 or self.height() == 0:
+            return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect().adjusted(8, 8, -8, -8)
@@ -104,14 +115,15 @@ class AICoreOrb(QWidget):
 
         painter.setPen(QColor(215, 251, 255))
         painter.drawText(rect, Qt.AlignHCenter | Qt.AlignBottom, self.state.value.replace("_", " "))
+        painter.end()
 
     def _state_color(self) -> QColor:
         return {
-            OrbState.IDLE: QColor(34, 216, 255),
-            OrbState.LISTENING: QColor(48, 255, 210),
-            OrbState.THINKING: QColor(255, 210, 82),
-            OrbState.SPEAKING: QColor(92, 235, 255),
-            OrbState.ERROR: QColor(255, 166, 54),
-            OrbState.OFFLINE: QColor(92, 120, 130),
-            OrbState.CAMERA_DISABLED: QColor(45, 170, 255),
+            OrbState.IDLE: QColor(34, 216, 255),           # Soft Cyan
+            OrbState.LISTENING: QColor(48, 255, 210),      # Bright Cyan / Aqua
+            OrbState.THINKING: QColor(255, 210, 100),      # Soft Gold
+            OrbState.SPEAKING: QColor(0, 150, 255),        # Electric Cyan-Blue
+            OrbState.ERROR: QColor(255, 120, 54),          # Orange/Error
+            OrbState.OFFLINE: QColor(92, 120, 130),        # Muted Blue-Gray
+            OrbState.CAMERA_DISABLED: QColor(45, 170, 255),# Similar to Idle but dimmer
         }[self.state]

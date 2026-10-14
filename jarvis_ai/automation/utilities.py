@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 
-from ai.personality import FACTS, JOKES, QUOTES
+from jarvis_ai.ai.personality import FACTS, JOKES, QUOTES
 
 
 class Utilities:

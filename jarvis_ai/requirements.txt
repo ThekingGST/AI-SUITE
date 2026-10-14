@@ -5,7 +5,6 @@ onnxruntime==1.18.1
 ultralytics==8.3.40
 mediapipe==0.10.14
 deepface==0.0.93
-pyttsx3==2.90
 elevenlabs>=1.0.0
 pygame>=2.5.0
 python-dotenv>=1.0.0

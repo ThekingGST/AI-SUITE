@@ -7,9 +7,9 @@ from typing import Any
 
 import numpy as np
 
-from core.workers import CancellableWorker, LatestOnlyQueue
-from utils.logger import LOGGER
-from vision.object_detection import ObjectDetector
+from jarvis_ai.core.workers import CancellableWorker, LatestOnlyQueue
+from jarvis_ai.utils.logger import LOGGER
+from jarvis_ai.vision.object_detection import ObjectDetector
 
 
 @dataclass
@@ -70,27 +70,44 @@ class ObjectDetectionWorker(CancellableWorker):
         self._drain_frames()
 
     def run(self) -> None:
-        while not self.stopped:
-            if not self.enabled:
-                time.sleep(0.05)
-                continue
-            frame = self.frames.get(timeout=0.1)
-            if frame is None:
-                continue
-            now = time.time()
-            if now - self._last_inference < self.interval_seconds:
-                continue
-            self._last_inference = now
-            if self._detector is None:
-                self._detector = ObjectDetector()
-            detections = self._detector.detect(frame) if self._detector else []
-            with self._lock:
-                if self._enabled:
-                    self._state = ObjectDetectionState(
-                        enabled=True,
-                        detections=detections,
-                        updated_at=time.time(),
-                    )
+        try:
+            while not self.stopped:
+                if not self.enabled:
+                    time.sleep(0.05)
+                    continue
+                frame = self.frames.get(timeout=0.1)
+                if frame is None:
+                    continue
+                now = time.time()
+                if now - self._last_inference < self.interval_seconds:
+                    continue
+                self._last_inference = now
+                if self._detector is None:
+                    self._detector = ObjectDetector()
+                    if getattr(self._detector, "model", None) is None:
+                        raise RuntimeError("YOLO model failed to load. ObjectDetector returned None.")
+                detections = self._detector.detect(frame) if self._detector else []
+                with self._lock:
+                    if self._enabled:
+                        self._state = ObjectDetectionState(
+                            enabled=True,
+                            detections=detections,
+                            updated_at=time.time(),
+                        )
+        except Exception as exc:
+            import traceback
+            import os
+            from datetime import datetime
+            from pathlib import Path
+            log_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "AISuite" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            error_file = log_dir / "detection_error.log"
+            with open(error_file, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().isoformat()}] ObjectDetectionWorker CRASHED:\n")
+                f.write(traceback.format_exc())
+                f.write("\n")
+            LOGGER.error("ObjectDetectionWorker crashed: %s", exc)
+            self.set_enabled(False)
 
     def _drain_frames(self) -> None:
         while self.frames.get(timeout=0.001) is not None:

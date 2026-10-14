@@ -5,149 +5,184 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
 
-from ai.context_manager import ContextManager
-from ai.memory import MemoryStore
-from ai.personality import build_system_prompt, offline_reply
-from config import CONFIG
-from utils.logger import LOGGER
+from jarvis_ai.ai.context_manager import ContextManager
+from jarvis_ai.ai.memory import MemoryStore
+from jarvis_ai.ai.personality import build_system_prompt, offline_reply
+from jarvis_ai.config import CONFIG
+from jarvis_ai.utils.logger import LOGGER
 
 
 class OllamaBrain:
-    """Local LLM brain with streaming Ollama support and an offline fallback."""
+    """Local LLM brain using direct HTTP requests to Ollama API."""
 
     def __init__(self, memory: MemoryStore) -> None:
         self.memory = memory
         self.context = ContextManager(CONFIG.ai.max_history_messages)
         self.context.load(memory.recent_messages(CONFIG.ai.max_history_messages))
-        self.model = self._select_model()
-
-    def _request_json(self, path: str, payload: dict | None = None, timeout: float = 4.0) -> dict:
-        data = None if payload is None else json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            CONFIG.ai.ollama_url + path,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="GET" if payload is None else "POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-
-    def _select_model(self) -> str | None:
-        try:
-            data = self._request_json("/api/tags", timeout=2.0)
-            installed = {m.get("name", "").split(":")[0] for m in data.get("models", [])}
-            for model in CONFIG.ai.preferred_models:
-                if model in installed:
-                    LOGGER.info("Ollama model selected: %s", model)
-                    return model
-            LOGGER.warning("Ollama is running but no preferred model is installed.")
-        except Exception as exc:
-            LOGGER.warning("Ollama unavailable; offline fallback active: %s", exc)
-        return None
+        self.model = self._detect_model()
+        if self.model:
+            LOGGER.info("OllamaBrain initialized with model: %s", self.model)
+        else:
+            LOGGER.warning("OllamaBrain initialized, but no local model was found. Falling back to offline mode.")
 
     def refresh_model(self) -> str | None:
-        self.model = self._select_model()
+        self.model = self._detect_model()
         return self.model
 
     def ask(self, prompt: str, on_token: Callable[[str], None] | None = None) -> str:
+        tokens = []
+        for token in self.ask_stream(prompt):
+            tokens.append(token)
+            if on_token:
+                on_token(token)
+        return "".join(tokens)
+
+    def ask_stream(self, prompt: str) -> Iterator[str]:
+        if not self.model:
+            reply = offline_reply(prompt)
+            self._store_assistant(reply)
+            yield reply
+            return
+
         self.memory.add_message("user", prompt)
         self.context.add("user", prompt)
+        messages = [{"role": "system", "content": build_system_prompt()}, *self.context.messages()]
 
-        # Auto-retry model selection if Ollama was unavailable at startup.
-        if not self.model:
-            LOGGER.info("Ollama model not set; attempting auto-retry...")
-            self.model = self._select_model()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+        }
 
-        if not self.model:
-            LOGGER.info("Ollama still unavailable; using offline fallback.")
-            response = offline_reply(prompt)
-            self._store_assistant(response)
-            if on_token:
-                on_token(response)
-            return response
-
+        full_response = []
         try:
-            response = "".join(self._stream_chat(prompt, on_token))
-            cleaned = self._cleanup(response)
-            self._store_assistant(cleaned)
-            return cleaned
-        except Exception as exc:
-            LOGGER.warning("Ollama chat failed (%s); using fallback: %s", type(exc).__name__, exc)
-            response = offline_reply(prompt)
-            self._store_assistant(response)
-            if on_token:
-                on_token(response)
-            return response
+            req = urllib.request.Request(
+                f"{CONFIG.ai.ollama_url}/api/chat",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=CONFIG.ai.response_timeout_seconds) as response:
+                for line in response:
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line.decode("utf-8"))
+                        token = data.get("message", {}).get("content", "")
+                        if token:
+                            full_response.append(token)
+                            yield token
+                    except json.JSONDecodeError:
+                        continue
+        except (urllib.error.URLError, TimeoutError) as exc:
+            LOGGER.error("Ollama inference failed: %s", exc)
+            yield offline_reply(prompt)
+            return
+
+        cleaned = self._cleanup("".join(full_response))
+        self._store_assistant(cleaned)
 
     def ask_grounded(self, prompt: str, search_context: str,
                      on_token: Callable[[str], None] | None = None) -> str:
-        """Answer a user query using web search results as grounding context.
+        tokens = []
+        for token in self.ask_grounded_stream(prompt, search_context):
+            tokens.append(token)
+            if on_token:
+                on_token(token)
+        return "".join(tokens)
 
-        Saves both the user message and the response to memory and context
-        through the same pipeline as ``ask()``.
-        """
+    def ask_grounded_stream(self, prompt: str, search_context: str, instruction: str = None) -> Iterator[str]:
+        if not self.model:
+            reply = offline_reply(prompt)
+            self._store_assistant(reply)
+            yield reply
+            return
+
         self.memory.add_message("user", prompt)
         self.context.add("user", prompt)
 
-        if not self.model:
-            self.model = self._select_model()
-        if not self.model:
-            response = offline_reply(prompt)
-            self._store_assistant(response)
-            return response
+        if instruction is None:
+            instruction = (
+                "You just performed a web search. Here are the results:\n"
+                f"{search_context}\n\n"
+                "INSTRUCTIONS:\n"
+                "1. Synthesize these results to answer the user's question accurately.\n"
+                "2. Answer NATURALLY and CONVERSATIONALLY in your JARVIS persona.\n"
+                "3. Do NOT say 'Based on the web results' or 'According to the search'. "
+                "Just state the facts as if you already know them.\n"
+                "4. If the results are news, summarize them nicely. "
+                "If they don't contain the answer, say you aren't sure right now.\n"
+                "5. Keep the response concise but informative.\n"
+            )
 
         grounded_prompt = (
             build_system_prompt() + "\n\n"
-            "You just performed a web search. Here are the results:\n"
-            f"{search_context}\n\n"
-            "INSTRUCTIONS:\n"
-            "1. Synthesize these results to answer the user's question accurately.\n"
-            "2. Answer NATURALLY and CONVERSATIONALLY in your JARVIS persona.\n"
-            "3. Do NOT say 'Based on the web results' or 'According to the search'. "
-            "Just state the facts as if you already know them.\n"
-            "4. If the results are news, summarize them nicely. "
-            "If they don't contain the answer, say you aren't sure right now.\n"
-            "5. Keep the response concise but informative.\n"
+            f"{instruction}\n\n"
         )
 
         messages = [
             {"role": "system", "content": grounded_prompt},
             *self.context.messages(),
         ]
-        payload = {"model": self.model, "messages": messages, "stream": False}
 
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+        }
+
+        full_response = []
         try:
-            res = self._request_json("/api/chat", payload, timeout=CONFIG.ai.response_timeout_seconds)
-            reply = res.get("message", {}).get("content", "").strip()
-            cleaned = self._cleanup(reply)
-            self._store_assistant(cleaned)
-            return cleaned
-        except Exception as exc:
-            LOGGER.warning("Grounded ask failed (%s): %s", type(exc).__name__, exc)
-            response = offline_reply(prompt)
-            self._store_assistant(response)
-            return response
+            req = urllib.request.Request(
+                f"{CONFIG.ai.ollama_url}/api/chat",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=CONFIG.ai.response_timeout_seconds) as response:
+                for line in response:
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line.decode("utf-8"))
+                        token = data.get("message", {}).get("content", "")
+                        if token:
+                            full_response.append(token)
+                            yield token
+                    except json.JSONDecodeError:
+                        continue
+        except (urllib.error.URLError, TimeoutError) as exc:
+            LOGGER.error("Ollama grounded inference failed: %s", exc)
+            yield offline_reply(prompt)
+            return
 
-    def _stream_chat(self, prompt: str, on_token: Callable[[str], None] | None) -> Iterator[str]:
-        messages = [{"role": "system", "content": build_system_prompt()}, *self.context.messages()]
-        payload = {"model": self.model, "messages": messages, "stream": True}
+        cleaned = self._cleanup("".join(full_response))
+        self._store_assistant(cleaned)
+
+    def _request_json(self, endpoint: str, payload: dict, timeout: int = 10) -> dict:
+        """Helper to send a JSON request and return the JSON response."""
         req = urllib.request.Request(
-            CONFIG.ai.ollama_url + "/api/chat",
+            f"{CONFIG.ai.ollama_url}{endpoint}",
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
+            method="POST",
         )
-        with urllib.request.urlopen(req, timeout=CONFIG.ai.response_timeout_seconds) as response:
-            for line in response:
-                if not line.strip():
-                    continue
-                data = json.loads(line.decode("utf-8"))
-                token = data.get("message", {}).get("content", "")
-                if token:
-                    if on_token:
-                        on_token(token)
-                    yield token
-                if data.get("done"):
-                    break
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _detect_model(self) -> str | None:
+        try:
+            req = urllib.request.Request(f"{CONFIG.ai.ollama_url}/api/tags")
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                models = [m.get("name") for m in data.get("models", [])]
+                for preferred in CONFIG.ai.preferred_models:
+                    for model in models:
+                        if model.startswith(preferred):
+                            return model
+        except Exception as exc:
+            LOGGER.warning("Could not contact Ollama to detect models: %s", exc)
+        return None
 
     def _store_assistant(self, response: str) -> None:
         self.context.add("assistant", response)
