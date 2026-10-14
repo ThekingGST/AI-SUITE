@@ -58,6 +58,32 @@ class HealthCheckWorker(QThread):
         except Exception as e:
             self.progress.emit(15, f"Camera error: {e}", False)
             
+        # Check Registered Models
+        self.progress.emit(18, "Checking Registered Models...", True)
+        try:
+            from shared.models.model_registry import ModelRegistry
+            registry = ModelRegistry()
+            missing_req = []
+            missing_opt = []
+            for name, info in registry.get_all().items():
+                path = registry.get_model_path(name)
+                if not path or not path.exists():
+                    if info.required:
+                        missing_req.append(name)
+                    else:
+                        missing_opt.append(name)
+            
+            if missing_opt:
+                self.progress.emit(19, f"Missing optional models: {', '.join(missing_opt)}", True)
+                
+            if missing_req:
+                self.progress.emit(20, f"Missing REQUIRED models: {', '.join(missing_req)}", False)
+                passed = False
+            else:
+                self.progress.emit(20, "Required models found", True)
+        except Exception as e:
+            self.progress.emit(20, f"Model registry error: {e}", False)
+            
         # 2. YOLO
         self.progress.emit(25, "Initializing YOLO Object Detection...", True)
         try:

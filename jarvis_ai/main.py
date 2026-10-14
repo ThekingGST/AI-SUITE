@@ -30,10 +30,11 @@ def main() -> int:
     from ai_suite.core.registry import ServiceContainer
     from ai_suite.core.memory.engine import MemoryEngine
     from ai_suite.core.memory.storage import SQLiteStorageProvider
+    from shared.config.config_manager import ConfigManager
     
     if ServiceContainer.get(MemoryEngine) is None:
         event_bus = EventBus()
-        storage_provider = SQLiteStorageProvider()
+        storage_provider = SQLiteStorageProvider(db_path=ConfigManager.MEMORY_DB)
         memory_engine = MemoryEngine(event_bus, storage_provider)
         ServiceContainer.register(MemoryEngine, memory_engine)
         

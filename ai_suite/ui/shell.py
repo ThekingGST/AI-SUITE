@@ -39,17 +39,20 @@ def _get_current_user_name() -> str:
 
 def _get_compute_info() -> str:
     try:
-        import torch
-        if torch.cuda.is_available():
-            name = torch.cuda.get_device_name(0)
+        from shared.hardware.manager import HardwareManager
+        hw = HardwareManager()
+        if not getattr(hw, "_initialized", False):
+            hw.detect_all()
+        if hw.gpu.available:
+            name = hw.gpu.name
             if "RTX" in name:
                 return "RTX " + name.split("RTX ")[1].split(" ")[0]
             elif "GTX" in name:
                 return "GTX " + name.split("GTX ")[1].split(" ")[0]
-            return "CUDA"
+            return "NVIDIA GPU"
+        return "CPU mode"
     except Exception:
-        pass
-    return "CPU"
+        return "CPU mode"
 
 
 class TopBar(QWidget):
@@ -212,6 +215,17 @@ class StatusBar(QWidget):
             
             self.cpu_label.setText(f"CPU: {cpu}%")
             self.ram_label.setText(f"RAM: {ram}%")
+            
+            try:
+                from shared.hardware.manager import HardwareManager
+                vram_usage = HardwareManager().get_vram_usage()
+                vram_pct = vram_usage.get("percent", 0.0)
+                if HardwareManager().get_gpu_info().available:
+                    self.gpu_util_label.setText(f"VRAM: {vram_pct:.1f}%")
+                else:
+                    self.gpu_util_label.setText("VRAM: N/A")
+            except Exception:
+                self.gpu_util_label.setText("VRAM: N/A")
         
     def _on_assistant_state(self, id: str, old: str, new: str):
         self.mode_label.setText(f"{id.upper()}: {new.upper()}")
@@ -441,5 +455,9 @@ class AISuiteWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         LOGGER.info("Initiating AI Suite shutdown...")
-        self.workspace_manager.shutdown_all()
+        if self.workspace_manager:
+            try:
+                self.workspace_manager.shutdown_all()
+            except Exception as e:
+                LOGGER.error(f"Error during workspace shutdown: {e}")
         event.accept()
